@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shorts Automation</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="top-nav">
+      <a href="/">홈</a>
+      <a href="/planner">작업플래너</a>
+      <a href="/blog">블로그자동화</a>
+      <a href="/shorts">영상자동화</a>
+      <a href="/wordpress">워드프레스 자동화</a>
+      <a href="/settings">설정</a>
+    </nav>
+    <main class="layout full shorts-layout">
+      <header class="hero shorts-hero">
+        <h1>영상 자동화</h1>
+        <p>유튜브 숏츠/인스타 릴스용 초안을 생성합니다.</p>
+      </header>
+      <section class="content shorts-main">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>생성옵션설정</h2>
+            <button
+              type="submit"
+              form="shortsGenerateForm"
+              class="confirm-button"
+            >
+              초안생성하기
+            </button>
+          </div>
+          <form method="post" class="blog-form" id="shortsGenerateForm">
+            <input type="hidden" name="action" value="generate_shorts" />
+            <div class="form-row">
+              <div class="label-col">프롬프트(선택)</div>
+              <div class="field-col">
+                <textarea
+                  name="extra_prompt"
+                  rows="3"
+                  placeholder="추가로 반영할 요청이 있다면 입력해주세요."
+                ></textarea>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">기획서</div>
+              <div class="field-col">
+                <div class="cta-row inline-select">
+                  <button type="button" class="ghost-link" id="openBriefModal">
+                    불러오기
+                  </button>
+                  <span class="selection-inline">
+                    말씀:
+                    <strong id="briefSelectionStatus"
+                      >{{ selected_brief_label or "선택 없음" }}</strong
+                    >
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">길이</div>
+              <div class="field-col">
+                <select name="length_seconds">
+                  <option value="25초" selected>25초</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">컷 수</div>
+              <div class="field-col">
+                <select name="cuts_count">
+                  <option value="3">3컷</option>
+                  <option value="4" selected>4컷</option>
+                  <option value="5">5컷</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">음성</div>
+              <div class="field-col">
+                <select name="voice">
+                  <option value="alloy" selected>Alloy</option>
+                  <option value="verse">Verse</option>
+                  <option value="aria">Aria</option>
+                  <option value="ember">Ember</option>
+                  <option value="nova">Nova</option>
+                  <option value="onyx">Onyx</option>
+                </select>
+              </div>
+            </div>
+          </form>
+          <form method="post" enctype="multipart/form-data" class="blog-form" id="shortsImageForm">
+            <input type="hidden" name="action" value="upload_shorts_images" />
+            <div class="form-row">
+              <div class="label-col">이미지 업로드</div>
+              <div class="field-col">
+                <input type="file" name="shorts_images" accept="image/*" multiple />
+                <p class="meta">컷 수만큼 업로드 (수동)</p>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        {% if error %}
+        <div class="toast" data-message="{{ error }}"></div>
+        {% elif notice %}
+        <div class="toast" data-message="{{ notice }}"></div>
+        {% endif %}
+
+        <section class="panel result">
+          <div class="result-header">
+            <h2>결과</h2>
+          </div>
+          <div class="result-cards">
+            <div class="result-card">
+              <h3>제목</h3>
+              <div class="card-content">
+                <p>{{ shorts_result.title if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>Hook</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ shorts_result.hook if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>Everyday Scene</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ shorts_result.everyday_scene if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>Pause</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ shorts_result.pause if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>Verse</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ shorts_result.verse if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>Closing Meditation</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ shorts_result.closing_meditation if shorts_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>스크립트 / 나레이션</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">
+                  {{ shorts_result.script if shorts_result else "" }}
+                </p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>영상 설명</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">
+                  {{ shorts_result.description if shorts_result else "" }}
+                </p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>컷 구성</h3>
+              <div class="card-content">
+                {% if shorts_result and shorts_result.cuts %}
+                <ol class="result-list">
+                  {% for item in shorts_result.cuts %}
+                  <li>
+                    <strong>{{ item.cut }}컷</strong>
+                    {% if item.timing %} ({{ item.timing }}){% endif %}: {{
+                    item.visual }} {% if item.on_screen %} / {{ item.on_screen
+                    }}{% endif %}
+                  </li>
+                  {% endfor %}
+                </ol>
+                {% endif %}
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>이미지 프롬프트</h3>
+              <div class="card-content">
+                {% if shorts_result and shorts_result.image_prompts %}
+                <div class="prompt-row">
+                  <pre class="prompt-text" id="shortsImagePrompt">
+{% for item in shorts_result.image_prompts %}{{ loop.index }}. {{ item }}{% if not loop.last %}\n\n{% endif %}{% endfor %}</pre
+                  >
+                  <button
+                    type="button"
+                    class="ghost-link"
+                    id="copyShortsPrompt"
+                  >
+                    복사
+                  </button>
+                </div>
+                {% else %}
+                <p class="meta">아직 생성되지 않았습니다.</p>
+                {% endif %}
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+          </div>
+        </section>
+        <div class="submit-row sticky-actions">
+          <form method="post" class="shorts-make-form">
+            <input type="hidden" name="action" value="make_shorts" />
+            <input type="hidden" name="voice" id="shortsVoiceValue" value="alloy" />
+            <button type="submit" class="submit-button" {% if not shorts_result or make_status == "in_progress" %}disabled{% endif %}>
+              숏츠만들기
+            </button>
+          </form>
+        </div>
+      </section>
+      <aside class="sidebar shorts-sidebar">
+        <section class="panel">
+          <h2>제작 진행</h2>
+          <div class="status-block">
+            <h3>상태</h3>
+            <ul class="process-list">
+              <li class="process-item">
+                <span>기획서 선택</span>
+                <span class="process-status">{{ "완료" if result else "대기" }}</span>
+              </li>
+              <li class="process-item">
+                <span>초안 생성</span>
+                <span class="process-status">{{ "완료" if shorts_result else "대기" }}</span>
+              </li>
+              <li class="process-item">
+                <span>숏츠 제작</span>
+                <span class="process-status" id="shortsMakeStatus">
+                  {% if make_status == "in_progress" %}
+                  진행중
+                  {% elif make_status == "done" %}
+                  완료
+                  {% elif make_status == "error" %}
+                  오류
+                  {% elif make_status == "ready" %}
+                  대기
+                  {% else %}
+                  대기
+                  {% endif %}
+                </span>
+              </li>
+            </ul>
+            <p class="meta" id="shortsClientStatus"></p>
+            {% if shorts_steps %}
+            <ul class="process-list" id="shortsStepsList">
+              {% for step in shorts_steps %}
+              <li class="process-item">
+                <span>{{ step }}</span>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <ul class="process-list" id="shortsStepsList"></ul>
+            {% endif %}
+          </div>
+          <div class="status-block">
+            <h3>결과물</h3>
+            <ul class="process-list" id="shortsOutputsList">
+              {% if shorts_outputs %}
+                {% for item in shorts_outputs %}
+                <li class="process-item">
+                  <span>{{ item.label }}</span>
+                  <span class="process-status">{{ item.path }}</span>
+                </li>
+                {% endfor %}
+              {% endif %}
+            </ul>
+            {% if make_status == "in_progress" %}
+            <p class="meta" id="shortsOutputsEmpty">제작 중입니다. 잠시만 기다려 주세요.</p>
+            {% elif make_status == "ready" %}
+            <p class="meta" id="shortsOutputsEmpty">숏츠 만들기를 눌러주세요.</p>
+            {% elif make_status == "error" %}
+            <p class="meta" id="shortsOutputsEmpty">제작 중 오류가 발생했습니다.</p>
+            {% elif make_status == "done" %}
+            <p class="meta" id="shortsOutputsEmpty">결과물 저장에 실패했습니다.</p>
+            {% else %}
+            <p class="meta" id="shortsOutputsEmpty">아직 생성된 결과물이 없습니다.</p>
+            {% endif %}
+          </div>
+        </section>
+      </aside>
+    </main>
+    <div class="modal" id="briefModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="briefModalTitle"
+      >
+        <div class="modal-header">
+          <h3 id="briefModalTitle">말씀 선택</h3>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+        <div class="modal-body">
+          {% if used_entries %}
+          <ul class="modal-list">
+            {% for entry in used_entries %}
+            <li class="modal-row">
+              <div class="modal-verse">
+                <strong>{{ entry.theme }}</strong>
+                <div class="meta">{{ entry.verse_reference }}</div>
+              </div>
+              <div class="modal-actions">
+                <form method="post">
+                  <input
+                    type="hidden"
+                    name="action"
+                    value="shorts_load_verse"
+                  />
+                  <input
+                    type="hidden"
+                    name="verse_reference"
+                    value="{{ entry.verse_reference }}"
+                  />
+                  <button type="submit" class="ghost-button">선택</button>
+                </form>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="meta">등록된 말씀이 없습니다.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <button
+      type="button"
+      class="scroll-top"
+      id="scrollTopButton"
+      aria-label="상단으로 이동"
+    >
+      ⌃
+    </button>
+  </body>
+  <script>
+    const openBriefModal = document.getElementById("openBriefModal");
+    const briefModal = document.getElementById("briefModal");
+    if (openBriefModal && briefModal) {
+      const closeModal = () => {
+        briefModal.classList.remove("open");
+        briefModal.setAttribute("aria-hidden", "true");
+      };
+      const openModal = () => {
+        briefModal.classList.add("open");
+        briefModal.setAttribute("aria-hidden", "false");
+      };
+      openBriefModal.addEventListener("click", openModal);
+      briefModal.addEventListener("click", (event) => {
+        if (
+          event.target &&
+          event.target.dataset &&
+          event.target.dataset.close
+        ) {
+          closeModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && briefModal.classList.contains("open")) {
+          closeModal();
+        }
+      });
+    }
+
+    const scrollTopButton = document.getElementById("scrollTopButton");
+    if (scrollTopButton) {
+      const toggleScrollButton = () => {
+        if (window.scrollY > 300) {
+          scrollTopButton.classList.add("show");
+        } else {
+          scrollTopButton.classList.remove("show");
+        }
+      };
+      window.addEventListener("scroll", toggleScrollButton);
+      toggleScrollButton();
+      scrollTopButton.addEventListener("click", () => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+
+    const shortsForm = document.getElementById("shortsGenerateForm");
+    if (shortsForm) {
+      shortsForm.addEventListener("submit", () => {
+        const resultPanel = document.querySelector(".panel.result");
+        if (resultPanel) {
+          resultPanel.classList.add("loading");
+        }
+      });
+    }
+
+    const makeForm = document.querySelector(".shorts-make-form");
+    const clientStatus = document.getElementById("shortsClientStatus");
+    if (makeForm && clientStatus) {
+      makeForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        clientStatus.textContent = "제작 중입니다...";
+        const button = makeForm.querySelector("button[type='submit']");
+        if (button) {
+          button.disabled = true;
+        }
+        setTimeout(() => {
+          makeForm.submit();
+        }, 50);
+      });
+    }
+
+    const statusEl = document.getElementById("shortsMakeStatus");
+    const stepsList = document.getElementById("shortsStepsList");
+    const outputsList = document.getElementById("shortsOutputsList");
+    const outputsEmpty = document.getElementById("shortsOutputsEmpty");
+    let pollTimer = null;
+    const pollStatus = async () => {
+      try {
+        const resp = await fetch("/shorts/status");
+        if (!resp.ok) {
+          return;
+        }
+        const data = await resp.json();
+        if (statusEl) {
+          const map = {
+            in_progress: "진행중",
+            done: "완료",
+            error: "오류",
+            ready: "대기",
+            idle: "대기",
+          };
+          statusEl.textContent = map[data.status] || "대기";
+        }
+        if (stepsList) {
+          stepsList.innerHTML = "";
+          (data.steps || []).forEach((step) => {
+            const li = document.createElement("li");
+            li.className = "process-item";
+            li.innerHTML = `<span>${step}</span>`;
+            stepsList.appendChild(li);
+          });
+        }
+        if (outputsList) {
+          outputsList.innerHTML = "";
+          (data.outputs || []).forEach((item) => {
+            const li = document.createElement("li");
+            li.className = "process-item";
+            li.innerHTML = `<span>${item.label}</span><span class="process-status">${item.path}</span>`;
+            outputsList.appendChild(li);
+          });
+        }
+        if (outputsEmpty) {
+          if (data.outputs && data.outputs.length) {
+            outputsEmpty.style.display = "none";
+          } else {
+            outputsEmpty.style.display = "block";
+            if (data.status === "in_progress") {
+              outputsEmpty.textContent = "제작 중입니다. 잠시만 기다려 주세요.";
+            } else if (data.status === "ready") {
+              outputsEmpty.textContent = "숏츠 만들기를 눌러주세요.";
+            } else if (data.status === "error") {
+              outputsEmpty.textContent = "제작 중 오류가 발생했습니다.";
+            } else if (data.status === "done") {
+              outputsEmpty.textContent = "결과물 저장에 실패했습니다.";
+            } else {
+              outputsEmpty.textContent = "아직 생성된 결과물이 없습니다.";
+            }
+          }
+        }
+        if (data.status !== "in_progress" && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch (err) {
+        return;
+      }
+    };
+    if (makeForm) {
+      makeForm.addEventListener("submit", () => {
+        if (!pollTimer) {
+          pollTimer = setInterval(pollStatus, 2000);
+        }
+      });
+      pollStatus();
+    }
+
+    const voiceSelect = document.querySelector("select[name='voice']");
+    const voiceHidden = document.getElementById("shortsVoiceValue");
+    if (voiceSelect && voiceHidden) {
+      const syncVoice = () => {
+        voiceHidden.value = voiceSelect.value;
+      };
+      voiceSelect.addEventListener("change", syncVoice);
+      syncVoice();
+    }
+
+    const shortsImageForm = document.getElementById("shortsImageForm");
+    if (shortsImageForm) {
+      const imageInput = shortsImageForm.querySelector("input[name='shorts_images']");
+      if (imageInput) {
+        imageInput.addEventListener("change", () => {
+          if (imageInput.files && imageInput.files.length) {
+            shortsImageForm.submit();
+          }
+        });
+      }
+    }
+
+    const copyShortsBtn = document.getElementById("copyShortsPrompt");
+    const shortsPrompt = document.getElementById("shortsImagePrompt");
+    if (copyShortsBtn && shortsPrompt) {
+      copyShortsBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(shortsPrompt.textContent || "");
+          copyShortsBtn.textContent = "복사됨";
+          setTimeout(() => {
+            copyShortsBtn.textContent = "복사";
+          }, 1500);
+        } catch (err) {
+          copyShortsBtn.textContent = "복사 실패";
+        }
+      });
+    }
+
+    const toastEl = document.querySelector(".toast");
+    if (toastEl && toastEl.dataset.message) {
+      const msg = toastEl.dataset.message;
+      const container = document.createElement("div");
+      container.className = "toast-container";
+      container.textContent = msg;
+      document.body.appendChild(container);
+      setTimeout(() => container.classList.add("show"), 10);
+      setTimeout(() => {
+        container.classList.remove("show");
+        setTimeout(() => container.remove(), 300);
+      }, 3000);
+    }
+  </script>
+</html>

@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Letter for Living Planner</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="top-nav">
+      <a href="/">홈</a>
+      <a href="/planner">작업플래너</a>
+      <a href="/blog">블로그자동화</a>
+      <a href="/shorts">영상자동화</a>
+      <a href="/wordpress">워드프레스 자동화</a>
+      <a href="/settings">설정</a>
+    </nav>
+    <main class="layout">
+      <section class="content">
+        <header class="hero">
+          <h1>작업플래너</h1>
+          <p>Letter for living 프로젝트 포스터 기획 설계</p>
+        </header>
+
+      <section class="panel">
+        <h2>새 포스터</h2>
+        <form method="post" id="plannerForm">
+          <div class="form-row">
+            <div class="label-col">주제</div>
+            <div class="field-col">
+              <select name="theme">
+                <option value="" disabled selected>주제 선택</option>
+                {% for theme in themes %}
+                <option value="{{ theme }}">{{ theme }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="label-col">규격</div>
+            <div class="field-col">
+              <div class="field-subrow size-row">
+                <select name="size_family" id="sizeFamily">
+                  <option value="" disabled selected>규격표준</option>
+                  <option value="iso">한국/유럽 표준</option>
+                  <option value="us">북미 표준</option>
+                  <option value="photo">사진·인쇄 실무</option>
+                  <option value="custom">직접입력</option>
+                </select>
+                <select name="size" id="sizeSelect"></select>
+                <button type="button" id="swapSize" class="swap-button">가로↔세로</button>
+                <div class="custom-inline" id="customSizeBlock">
+                  <div class="size-inputs stack">
+                    <div class="size-line">
+                      <span class="mini-label">재단사이즈</span>
+                      <span class="dim-group">
+                        <input type="number" name="custom_width" min="1" step="1" placeholder="420" disabled />
+                        <span class="unit-mark">mm</span>
+                        <span class="dim-sep">×</span>
+                        <input type="number" name="custom_height" min="1" step="1" placeholder="594" disabled />
+                        <span class="unit-mark">mm</span>
+                      </span>
+                    </div>
+                    <div class="size-line">
+                      <span class="mini-label">작업사이즈</span>
+                      <span class="dim-group">
+                        <input type="number" name="work_width" min="1" placeholder="424" readonly disabled />
+                        <span class="unit-mark">mm</span>
+                        <span class="dim-sep">×</span>
+                        <input type="number" name="work_height" min="1" placeholder="598" readonly disabled />
+                        <span class="unit-mark">mm</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <input type="hidden" name="custom_size" id="customSizeValue" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="label-col">제작도수(컬러)</div>
+            <div class="field-col">
+              <select name="color_mode">
+                <option value="" disabled selected>선택</option>
+                <option value="bw">흑백</option>
+                <option value="two-colors">2색 조합</option>
+                <option value="full-color">제한 없음</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="label-col">톤</div>
+            <div class="field-col">
+              <input type="text" name="tone" placeholder="잔잔한, 단단한, 따뜻한" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="label-col">메모</div>
+            <div class="field-col">
+              <textarea name="notes" rows="4" placeholder="추가 방향성을 적어주세요"></textarea>
+            </div>
+          </div>
+
+          <div class="submit-row">
+            <button type="submit" class="submit-button" id="submitButton">기획 생성</button>
+          </div>
+        </form>
+      </section>
+
+      {% if error %}
+      <div class="toast" data-message="{{ error }}"></div>
+      {% elif notice %}
+      <div class="toast" data-message="{{ notice }}"></div>
+      {% endif %}
+
+      <section class="panel result">
+        <div class="result-header">
+          <h2>결과</h2>
+          <form method="post" class="confirm-form">
+            <input type="hidden" name="action" value="confirm" />
+            <input type="hidden" name="verse_reference" value="{{ result.verse_reference if result else '' }}" />
+            <input type="hidden" name="theme_value" value="{{ result.theme_display if result else '' }}" />
+            <button type="submit" class="confirm-button">제작확정</button>
+          </form>
+        </div>
+        <div class="result-cards">
+          <div class="result-card">
+            <h3>테마</h3>
+            <div class="card-content">
+              <p>{{ selected_theme or (result.theme_display if result else '') or (result.theme_en ~ " / " ~ result.theme_ko) }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line short"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>앵커 텍스트 (디자인 언어)</h3>
+            <div class="card-content">
+              <p>{{ result.anchor_text if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>말씀 출처</h3>
+            <div class="card-content">
+              <p><strong>{{ result.verse_reference if result else '' }}</strong></p>
+              {% if result and result.verse_reference_en %}
+              <p><strong>{{ result.verse_reference_en }}</strong></p>
+              {% endif %}
+              <p>{{ result.english_verse if result else '' }}</p>
+              <p>{{ result.korean_verse if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line short"></span>
+              <span class="skeleton-line short"></span>
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>말씀의 의미</h3>
+            <div class="card-content">
+              <p>핵심 의미: {{ result.meaning_core if result else '' }}</p>
+              <p>감정 포인트: {{ result.meaning_emotion if result else '' }}</p>
+              <p>붙잡는 순간: {{ result.meaning_moment if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>핵심 강조 요소</h3>
+            <div class="card-content">
+              <p>가장 중요한 부분: {{ result.emphasis_most if result else '' }}</p>
+              <p>생략 가능 부분: {{ result.emphasis_can_drop if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>디자인 가이드 (컬러/레이아웃)</h3>
+            <div class="card-content">
+              <p class="multiline">{{ result.design_guide if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>공간 속 사용 맥락</h3>
+            <div class="card-content">
+              <p>{{ result.spatial_context if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+              <span class="skeleton-line short"></span>
+            </div>
+          </div>
+          <div class="result-card">
+            <h3>기획 의도 한 줄</h3>
+            <div class="card-content">
+              <p>{{ result.one_line_intent if result else '' }}</p>
+            </div>
+            <div class="card-skeleton" aria-hidden="true">
+              <span class="skeleton-line"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+      </section>
+
+      <aside class="sidebar">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>제작된 말씀</h2>
+            <button type="button" class="edit-trigger" id="openThemeModal">수정</button>
+          </div>
+          <p class="meta">총 {{ used_count }}개</p>
+          <div class="used-list">
+            {% if used_by_theme %}
+            <ul>
+              {% for theme, verses in used_by_theme %}
+              <li class="used-theme">
+                <div class="used-theme-title">{{ theme }}</div>
+                <ul>
+                  {% for verse in verses %}
+                  <li class="used-verse">
+                    <span class="used-item">
+                      {% if brief_links.get(verse) %}
+                      <a href="/brief?file={{ brief_links.get(verse) }}">{{ verse }}</a>
+                      {% else %}
+                      {{ verse }}
+                      {% endif %}
+                  {% if verse in new_badges %}
+                  <span class="new-badge">new</span>
+                  {% endif %}
+                    </span>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="meta">등록된 말씀이 없습니다.</p>
+            {% endif %}
+          </div>
+        </div>
+      </aside>
+    </main>
+    <div class="modal" id="themeModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="themeModalTitle">
+        <div class="modal-header">
+          <h3 id="themeModalTitle">제작된 말씀 분류</h3>
+          <button type="button" class="modal-close" data-close="true">닫기</button>
+        </div>
+        <div class="modal-body">
+          <form method="post" class="used-form modal-add-form">
+            <input type="hidden" name="action" value="add_used" />
+            <input type="hidden" name="modal" value="1" />
+            <input type="text" name="verse_reference" placeholder="예: 요한복음 3:16" />
+            <button type="submit">추가</button>
+          </form>
+          {% if used_list %}
+          <form method="post" class="modal-bulk-form">
+            <input type="hidden" name="action" value="set_used_theme_bulk" />
+            <input type="hidden" name="modal" value="1" />
+            <ul class="modal-list">
+              {% for verse in used_list %}
+              <li class="modal-row">
+                <div class="modal-verse">
+                  {% if brief_links.get(verse) %}
+                  <a href="/brief?file={{ brief_links.get(verse) }}">{{ verse }}</a>
+                  {% else %}
+                  {{ verse }}
+                  {% endif %}
+                </div>
+                <div class="modal-actions">
+                  <input type="hidden" name="verse_reference" value="{{ verse }}" />
+                  <select name="theme_value">
+                    <option value="" {% if not used_theme_map.get(verse) %}selected{% endif %}>주제 선택</option>
+                    {% for theme in themes %}
+                    <option value="{{ theme }}" {% if used_theme_map.get(verse) == theme %}selected{% endif %}>{{ theme }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" name="delete_verse" value="{{ verse }}" class="ghost-button" aria-label="삭제">×</button>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            <div class="modal-save">
+              <button type="submit" name="bulk_save" value="1">전체 저장</button>
+            </div>
+          </form>
+          {% else %}
+          <p class="meta">등록된 말씀이 없습니다.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <button type="button" class="scroll-top" id="scrollTopButton" aria-label="상단으로 이동">⌃</button>
+  </body>
+  <script>
+    const sizeMap = {
+      iso: [
+        { value: "A4", label: "A4 (210×297 mm)", w: 210, h: 297 },
+        { value: "A3", label: "A3 (297×420 mm)", w: 297, h: 420 },
+        { value: "A2", label: "A2 (420×594 mm)", w: 420, h: 594 },
+        { value: "A1", label: "A1 (594×841 mm)", w: 594, h: 841 },
+        { value: "A0", label: "A0 (841×1189 mm)", w: 841, h: 1189 },
+        { value: "B4", label: "B4 (250×353 mm)", w: 250, h: 353 },
+        { value: "B3", label: "B3 (353×500 mm)", w: 353, h: 500 },
+        { value: "B2", label: "B2 (500×707 mm)", w: 500, h: 707 },
+        { value: "B1", label: "B1 (707×1000 mm)", w: 707, h: 1000 },
+        { value: "B0", label: "B0 (1000×1414 mm)", w: 1000, h: 1414 }
+      ],
+      us: [
+        { value: "Letter", label: "Letter (8.5×11 in)", w: 216, h: 279 },
+        { value: "Legal", label: "Legal (8.5×14 in)", w: 216, h: 356 },
+        { value: "Tabloid", label: "Tabloid (11×17 in)", w: 279, h: 432 },
+        { value: "Ledger", label: "Ledger (17×11 in)", w: 432, h: 279 }
+      ],
+      photo: [
+        { value: "4x6", label: "4×6 in", w: 102, h: 152 },
+        { value: "5x7", label: "5×7 in", w: 127, h: 178 },
+        { value: "8x10", label: "8×10 in", w: 203, h: 254 },
+        { value: "11x14", label: "11×14 in", w: 279, h: 356 },
+        { value: "16x20", label: "16×20 in", w: 406, h: 508 },
+        { value: "24x36", label: "24×36 in", w: 610, h: 914 }
+      ]
+    };
+
+    const sizeSelect = document.getElementById("sizeSelect");
+    const familySelect = document.getElementById("sizeFamily");
+    const customWidth = document.querySelector("input[name='custom_width']");
+    const customHeight = document.querySelector("input[name='custom_height']");
+    const workWidth = document.querySelector("input[name='work_width']");
+    const workHeight = document.querySelector("input[name='work_height']");
+    const customSizeBlock = document.getElementById("customSizeBlock");
+    const customSizeValue = document.getElementById("customSizeValue");
+    const plannerForm = document.getElementById("plannerForm");
+    const swapSize = document.getElementById("swapSize");
+
+    function renderSizes(family) {
+      sizeSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "규격사이즈";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      sizeSelect.appendChild(placeholder);
+      if (!sizeMap[family]) {
+        return;
+      }
+      sizeMap[family].forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item.value;
+        opt.textContent = item.label;
+        if (item.w && item.h) {
+          opt.dataset.w = String(item.w);
+          opt.dataset.h = String(item.h);
+        }
+        if (family === "iso" && item.value === "A2") {
+          opt.selected = true;
+        }
+        sizeSelect.appendChild(opt);
+      });
+    }
+
+    function updateCustomSize() {
+      const w = customWidth.value.trim();
+      const h = customHeight.value.trim();
+      if (w && h) {
+        const workW = Number(w) + 2;
+        const workH = Number(h) + 2;
+        workWidth.value = Number.isFinite(workW) ? workW : "";
+        workHeight.value = Number.isFinite(workH) ? workH : "";
+        customSizeValue.value = `${w}×${h} mm (재단), ${workW}×${workH} mm (작업)`;
+      } else {
+        workWidth.value = "";
+        workHeight.value = "";
+        customSizeValue.value = "";
+      }
+    }
+
+    customWidth.addEventListener("input", updateCustomSize);
+    customHeight.addEventListener("input", updateCustomSize);
+
+    function applySizeDimensions(optionEl) {
+      if (!optionEl) {
+        return;
+      }
+      const w = optionEl.dataset.w;
+      const h = optionEl.dataset.h;
+      if (w && h) {
+        customWidth.value = w;
+        customHeight.value = h;
+        updateCustomSize();
+      }
+    }
+    function toggleCustomInputs(enabled) {
+      customWidth.disabled = !enabled;
+      customHeight.disabled = !enabled;
+      workWidth.disabled = !enabled;
+      workHeight.disabled = !enabled;
+    }
+
+    function syncSizeFamily(family) {
+      if (family === "custom") {
+        toggleCustomInputs(true);
+        sizeSelect.value = "";
+        sizeSelect.disabled = true;
+      } else {
+        toggleCustomInputs(false);
+        sizeSelect.disabled = false;
+        customWidth.value = "";
+        customHeight.value = "";
+        updateCustomSize();
+        if (family) {
+          renderSizes(family);
+          const selected = sizeSelect.options[sizeSelect.selectedIndex];
+          if (selected) {
+            applySizeDimensions(selected);
+          }
+        } else {
+          sizeSelect.innerHTML = "";
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "규격사이즈";
+          placeholder.disabled = true;
+          placeholder.selected = true;
+          sizeSelect.appendChild(placeholder);
+        }
+      }
+    }
+
+    familySelect.addEventListener("change", (e) => {
+      syncSizeFamily(e.target.value);
+    });
+
+    sizeSelect.addEventListener("change", (e) => {
+      const selected = e.target.options[e.target.selectedIndex];
+      if (selected) {
+        applySizeDimensions(selected);
+      }
+    });
+
+    swapSize.addEventListener("click", () => {
+      const w = customWidth.value;
+      const h = customHeight.value;
+      if (w && h) {
+        customWidth.value = h;
+        customHeight.value = w;
+        updateCustomSize();
+      }
+    });
+
+    plannerForm.addEventListener("submit", () => {
+      updateCustomSize();
+      const btn = document.getElementById("submitButton");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "생성 중...";
+      }
+      const resultPanel = document.querySelector(".panel.result");
+      if (resultPanel) {
+        resultPanel.classList.add("loading");
+      }
+    });
+
+    const toastEl = document.querySelector(".toast");
+    if (toastEl && toastEl.dataset.message) {
+      const msg = toastEl.dataset.message;
+      const container = document.createElement("div");
+      container.className = "toast-container";
+      container.textContent = msg;
+      document.body.appendChild(container);
+      setTimeout(() => container.classList.add("show"), 10);
+      setTimeout(() => {
+        container.classList.remove("show");
+        setTimeout(() => container.remove(), 300);
+      }, 3000);
+    }
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("new")) {
+      url.searchParams.delete("new");
+      window.history.replaceState({}, "", url.toString());
+    }
+
+    const hero = document.querySelector(".hero");
+    const sidebarPanel = document.querySelector(".sidebar .panel");
+    const updateSidebarOffset = () => {
+      if (!hero || !sidebarPanel) {
+        return;
+      }
+      const heroStyles = window.getComputedStyle(hero);
+      const marginBottom = parseFloat(heroStyles.marginBottom) || 0;
+      const offset = hero.getBoundingClientRect().height + marginBottom;
+      sidebarPanel.style.marginTop = `${Math.max(0, Math.round(offset))}px`;
+    };
+    updateSidebarOffset();
+    window.addEventListener("resize", updateSidebarOffset);
+
+    const scrollTopButton = document.getElementById("scrollTopButton");
+    if (scrollTopButton) {
+      const toggleScrollButton = () => {
+        if (window.scrollY > 300) {
+          scrollTopButton.classList.add("show");
+        } else {
+          scrollTopButton.classList.remove("show");
+        }
+      };
+      window.addEventListener("scroll", toggleScrollButton);
+      toggleScrollButton();
+      scrollTopButton.addEventListener("click", () => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+
+    const openThemeModal = document.getElementById("openThemeModal");
+    const themeModal = document.getElementById("themeModal");
+    if (openThemeModal && themeModal) {
+      const closeModal = () => {
+        themeModal.classList.remove("open");
+        themeModal.setAttribute("aria-hidden", "true");
+      };
+      const openModal = () => {
+        themeModal.classList.add("open");
+        themeModal.setAttribute("aria-hidden", "false");
+      };
+      openThemeModal.addEventListener("click", openModal);
+      themeModal.addEventListener("click", (event) => {
+        if (event.target && event.target.dataset && event.target.dataset.close) {
+          closeModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && themeModal.classList.contains("open")) {
+          closeModal();
+        }
+      });
+      if (url.searchParams.get("modal") === "1") {
+        openModal();
+        url.searchParams.delete("modal");
+        window.history.replaceState({}, "", url.toString());
+      }
+    }
+
+    toggleCustomInputs(false);
+    syncSizeFamily(familySelect.value || "");
+    const initialOption = sizeSelect.options[sizeSelect.selectedIndex];
+    if (initialOption) {
+      applySizeDimensions(initialOption);
+    }
+
+        // Tabs removed: show all sections in one page
+  </script>
+</html>

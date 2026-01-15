@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>설정</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="top-nav">
+      <a href="/">홈</a>
+      <a href="/planner">작업플래너</a>
+      <a href="/blog">블로그자동화</a>
+      <a href="/shorts">영상자동화</a>
+      <a href="/wordpress">워드프레스 자동화</a>
+      <a href="/settings">설정</a>
+    </nav>
+    <main class="layout single">
+      <section class="content">
+        <header class="hero">
+          <h1>설정</h1>
+          <p>AI 및 계정 관련 설정을 관리합니다.</p>
+        </header>
+
+        <section class="panel">
+          <form method="post" class="settings-form">
+            <div class="settings-block">
+              <h3>AI 설정</h3>
+              <p class="meta">OpenAI API Key를 저장합니다.</p>
+              <div class="settings-fields">
+                <label>
+                  OpenAI API Key
+                  <input type="password" name="openai_api_key" value="{{ settings_data.get('openai_api_key', '') }}" />
+                </label>
+              </div>
+            </div>
+            <div class="settings-block">
+              <h3>네이버 계정 정보</h3>
+              <p class="meta">자동화에 사용할 로그인 정보를 관리합니다.</p>
+              <div class="settings-fields">
+                <label>
+                  네이버 아이디
+                  <input type="text" name="naver_id" value="{{ settings_data.get('naver_id', '') }}" />
+                </label>
+                <label>
+                  네이버 비밀번호
+                  <input type="password" name="naver_password" value="{{ settings_data.get('naver_password', '') }}" />
+                </label>
+                <label>
+                  글쓰기 URL
+                  <input
+                    type="text"
+                    name="naver_write_url"
+                    value="{{ settings_data.get('naver_write_url', '') }}"
+                    placeholder="https://blog.naver.com/…"
+                  />
+                </label>
+                <label>
+                  Chrome 프로필 경로
+                  <input
+                    type="text"
+                    name="chrome_profile_dir"
+                    value="{{ settings_data.get('chrome_profile_dir', '') }}"
+                    placeholder="/Users/.../Library/Application Support/LetterForLivingChrome"
+                  />
+                </label>
+              </div>
+            </div>
+            <div class="settings-block">
+              <h3>정보 초기화</h3>
+              <p class="meta">저장된 설정을 초기화합니다.</p>
+              <div class="settings-row compact">
+                <label class="inline-check">
+                  <input type="checkbox" name="reset_settings" value="1" />
+                  초기화 확인
+                </label>
+              </div>
+            </div>
+            <div class="settings-save">
+              <button type="submit">설정 저장</button>
+            </div>
+          </form>
+        </section>
+
+        {% if notice %}
+        <div class="toast" data-message="{{ notice }}"></div>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+  <script>
+    const toastEl = document.querySelector(".toast");
+    if (toastEl && toastEl.dataset.message) {
+      const msg = toastEl.dataset.message;
+      const container = document.createElement("div");
+      container.className = "toast-container";
+      container.textContent = msg;
+      document.body.appendChild(container);
+      setTimeout(() => container.classList.add("show"), 10);
+      setTimeout(() => {
+        container.classList.remove("show");
+        setTimeout(() => container.remove(), 300);
+      }, 3000);
+    }
+  </script>
+</html>

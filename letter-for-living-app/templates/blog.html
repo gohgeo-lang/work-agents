@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blog Draft</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="top-nav">
+      <a href="/">홈</a>
+      <a href="/planner">작업플래너</a>
+      <a href="/blog">블로그자동화</a>
+      <a href="/shorts">영상자동화</a>
+      <a href="/wordpress">워드프레스 자동화</a>
+      <a href="/settings">설정</a>
+    </nav>
+    <main class="layout full single">
+      <section class="content">
+        <header class="hero">
+          <h1>블로그 글 생성기</h1>
+          <p>고즈넉씨스튜디오의 블로그 글을 생성을 돕는 에이전트</p>
+        </header>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>생성옵션설정</h2>
+            <button
+              type="submit"
+              form="blogGenerateForm"
+              class="confirm-button"
+            >
+              초안생성하기
+            </button>
+          </div>
+          <form method="post" class="blog-form" id="blogGenerateForm">
+            <input type="hidden" name="action" value="generate_blog" />
+            <div class="form-row">
+              <div class="label-col">글 생성 방식</div>
+              <div class="field-col">
+                <div class="cta-row mode-row">
+                  <label class="option-pill">
+                    <input
+                      type="radio"
+                      name="generation_mode"
+                      value="planner"
+                      checked
+                    />
+                    작업플래너
+                  </label>
+                  <label class="option-pill">
+                    <input type="radio" name="generation_mode" value="upload" />
+                    원고 업로드
+                  </label>
+                </div>
+                <div class="mode-panel" id="plannerMode">
+                <div class="cta-row inline-select">
+                  <button
+                      type="button"
+                      class="ghost-link"
+                      id="openBriefModal"
+                    >
+                      불러오기
+                    </button>
+                    <span class="selection-inline">
+                      말씀:
+                      <strong id="briefSelectionStatus"
+                        >{{ selected_brief_label or "선택 없음" }}</strong
+                      >
+                    </span>
+                  </div>
+                </div>
+                <div class="mode-panel hidden" id="uploadMode">
+                  <div class="cta-row inline-select">
+                    <label class="upload-button">
+                      업로드하기
+                      <input type="file" name="manuscript_file" />
+                    </label>
+                    <span class="selection-inline">
+                      파일명:
+                      <strong id="uploadStatus">선택 없음</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">해시태그</div>
+              <div class="field-col">
+                <input
+                  type="number"
+                  name="hashtags_count"
+                  min="1"
+                  max="15"
+                  value="7"
+                />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">링크</div>
+              <div class="field-col">
+                <input
+                  type="text"
+                  name="site_link"
+                  placeholder="링크하고 싶은 url을 입력해주세요."
+                />
+              </div>
+            </div>
+          </form>
+          <form method="post" class="blog-form">
+            <input type="hidden" name="action" value="open_naver_writer" />
+            <div class="submit-row stack">
+              {% if not blog_result %}
+              <p class="meta">초안을 먼저 생성해 주세요.</p>
+              {% endif %}
+              <button
+                type="submit"
+                class="submit-button"
+                {%
+                if
+                not
+                blog_result
+                %}disabled{%
+                endif
+                %}
+              >
+                글 등록하기
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {% if error %}
+        <div class="toast" data-message="{{ error }}"></div>
+        {% elif notice %}
+        <div class="toast" data-message="{{ notice }}"></div>
+        {% endif %}
+
+        <section class="panel result">
+          <div class="result-header">
+            <h2>결과</h2>
+          </div>
+          <div class="result-cards">
+            <div class="result-card">
+              <h3>제목</h3>
+              <div class="card-content">
+                <p>{{ blog_result.title if blog_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line short"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>본문</h3>
+              <div class="card-content">
+                <p style="white-space: pre-line">{{ blog_result.body if blog_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>해시태그</h3>
+              <div class="card-content">
+                <p>{{ blog_result.hashtags if blog_result else "" }}</p>
+              </div>
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+              </div>
+            </div>
+            <div class="result-card">
+              <h3>이미지 업로드</h3>
+              <form method="post" enctype="multipart/form-data" id="imageUploadForm">
+                <input type="hidden" name="action" value="upload_image" />
+                <input type="file" name="image_file" accept="image/*" multiple />
+                <p class="meta">최대 2장</p>
+              </form>
+              {% if image_paths %}
+              <div class="meta">
+                {% for path in image_paths %}
+                <div>등록됨: {{ path }}</div>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="result-header">
+            <h2>작성 기록</h2>
+          </div>
+          {% if blog_history %}
+          <div class="result-cards">
+            {% for item in blog_history %}
+            <div class="result-card">
+              <h3>{{ item.title or "제목 없음" }}</h3>
+              <p class="meta">{{ item.date }} · {{ item.theme }} · {{ item.verse_reference }}</p>
+              <p>{{ item.body_preview }}</p>
+              {% if item.hashtags %}
+              <p class="meta">{{ item.hashtags }}</p>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="meta">작성 기록이 없습니다.</p>
+          {% endif %}
+        </section>
+      </section>
+    </main>
+    <div class="modal" id="briefModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="briefModalTitle"
+      >
+        <div class="modal-header">
+          <h3 id="briefModalTitle">말씀 선택</h3>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+    <div class="modal-body">
+          {% if used_entries %}
+          <ul class="modal-list">
+            {% for entry in used_entries %}
+            <li class="modal-row">
+              <div class="modal-verse">
+                <strong>{{ entry.theme }}</strong>
+                <div class="meta">{{ entry.verse_reference }}</div>
+              </div>
+              <div class="modal-actions">
+                <form method="post">
+                  <input type="hidden" name="action" value="load_used_verse" />
+                  <input
+                    type="hidden"
+                    name="verse_reference"
+                    value="{{ entry.verse_reference }}"
+                  />
+                  <button type="submit" class="ghost-button">선택</button>
+                </form>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="meta">등록된 말씀이 없습니다.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <button type="button" class="scroll-top" id="scrollTopButton" aria-label="상단으로 이동">⌃</button>
+  </body>
+  <script>
+    const openBriefModal = document.getElementById("openBriefModal");
+    const briefModal = document.getElementById("briefModal");
+    if (openBriefModal && briefModal) {
+      const closeModal = () => {
+        briefModal.classList.remove("open");
+        briefModal.setAttribute("aria-hidden", "true");
+      };
+      const openModal = () => {
+        briefModal.classList.add("open");
+        briefModal.setAttribute("aria-hidden", "false");
+      };
+      openBriefModal.addEventListener("click", openModal);
+      briefModal.addEventListener("click", (event) => {
+        if (
+          event.target &&
+          event.target.dataset &&
+          event.target.dataset.close
+        ) {
+          closeModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && briefModal.classList.contains("open")) {
+          closeModal();
+        }
+      });
+    }
+
+    const scrollTopButton = document.getElementById("scrollTopButton");
+    if (scrollTopButton) {
+      const toggleScrollButton = () => {
+        if (window.scrollY > 300) {
+          scrollTopButton.classList.add("show");
+        } else {
+          scrollTopButton.classList.remove("show");
+        }
+      };
+      window.addEventListener("scroll", toggleScrollButton);
+      toggleScrollButton();
+      scrollTopButton.addEventListener("click", () => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+
+    const blogForm = document.getElementById("blogGenerateForm");
+    if (blogForm) {
+      blogForm.addEventListener("submit", () => {
+        const resultPanel = document.querySelector(".panel.result");
+        if (resultPanel) {
+          resultPanel.classList.add("loading");
+        }
+      });
+    }
+
+    const imageUploadForm = document.getElementById("imageUploadForm");
+    if (imageUploadForm) {
+      const imageInput = imageUploadForm.querySelector("input[name='image_file']");
+      if (imageInput) {
+        imageInput.addEventListener("change", () => {
+          if (imageInput.files && imageInput.files.length) {
+            imageUploadForm.submit();
+          }
+        });
+      }
+    }
+
+    const toastEl = document.querySelector(".toast");
+    if (toastEl && toastEl.dataset.message) {
+      const msg = toastEl.dataset.message;
+      const container = document.createElement("div");
+      container.className = "toast-container";
+      container.textContent = msg;
+      document.body.appendChild(container);
+      setTimeout(() => container.classList.add("show"), 10);
+      setTimeout(() => {
+        container.classList.remove("show");
+        setTimeout(() => container.remove(), 300);
+      }, 3000);
+    }
+
+    const fileInput = document.querySelector("input[name='manuscript_file']");
+    const uploadStatus = document.getElementById("uploadStatus");
+    if (fileInput && uploadStatus) {
+      fileInput.addEventListener("change", () => {
+        const name =
+          fileInput.files && fileInput.files.length
+            ? fileInput.files[0].name
+            : "선택 없음";
+        uploadStatus.textContent = name;
+      });
+    }
+
+    const modeInputs = document.querySelectorAll(
+      "input[name='generation_mode']"
+    );
+    const plannerMode = document.getElementById("plannerMode");
+    const uploadMode = document.getElementById("uploadMode");
+    const updateMode = () => {
+      const selected = document.querySelector(
+        "input[name='generation_mode']:checked"
+      );
+      const isPlanner = selected && selected.value === "planner";
+      if (plannerMode && uploadMode) {
+        plannerMode.classList.toggle("hidden", !isPlanner);
+        uploadMode.classList.toggle("hidden", isPlanner);
+      }
+      if (fileInput) {
+        fileInput.disabled = isPlanner;
+      }
+    };
+    modeInputs.forEach((input) => {
+      input.addEventListener("change", updateMode);
+    });
+    updateMode();
+  </script>
+</html>
