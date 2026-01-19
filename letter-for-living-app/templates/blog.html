@@ -11,18 +11,20 @@
       <a href="/">홈</a>
       <a href="/planner">작업플래너</a>
       <a href="/blog">블로그자동화</a>
-      <a href="/shorts">영상자동화</a>
-      <a href="/wordpress">워드프레스 자동화</a>
       <a href="/settings">설정</a>
     </nav>
-    <main class="layout full single">
-      <section class="content">
-        <header class="hero">
-          <h1>블로그 글 생성기</h1>
-          <p>고즈넉씨스튜디오의 블로그 글을 생성을 돕는 에이전트</p>
-        </header>
-
-        <section class="panel">
+    <main class="layout full blog-layout">
+      <header class="hero full-span">
+        <h1>블로그 글 생성기</h1>
+        <p>고즈넉씨스튜디오의 블로그 글을 생성을 돕는 에이전트</p>
+      </header>
+      {% if error %}
+      <div class="toast full-span" data-message="{{ error }}"></div>
+      {% elif notice %}
+      <div class="toast full-span" data-message="{{ notice }}"></div>
+      {% endif %}
+      <section class="content blog-left">
+        <section class="panel blog-panel">
           <div class="panel-header">
             <h2>생성옵션설정</h2>
             <button
@@ -130,18 +132,17 @@
           </form>
         </section>
 
-        {% if error %}
-        <div class="toast" data-message="{{ error }}"></div>
-        {% elif notice %}
-        <div class="toast" data-message="{{ notice }}"></div>
-        {% endif %}
-
-        <section class="panel result">
+      </section>
+      <section class="content blog-right">
+        <section class="panel result blog-panel">
           <div class="result-header">
             <h2>결과</h2>
+            <button type="button" class="ghost-link" id="openHistoryPanel">
+              작성기록
+            </button>
           </div>
-          <div class="result-cards">
-            <div class="result-card">
+          <div class="result-plain">
+            <div class="result-block">
               <h3>제목</h3>
               <div class="card-content">
                 <p>{{ blog_result.title if blog_result else "" }}</p>
@@ -151,7 +152,7 @@
                 <span class="skeleton-line short"></span>
               </div>
             </div>
-            <div class="result-card">
+            <div class="result-block">
               <h3>본문</h3>
               <div class="card-content">
                 <p style="white-space: pre-line">{{ blog_result.body if blog_result else "" }}</p>
@@ -162,7 +163,7 @@
                 <span class="skeleton-line"></span>
               </div>
             </div>
-            <div class="result-card">
+            <div class="result-block">
               <h3>해시태그</h3>
               <div class="card-content">
                 <p>{{ blog_result.hashtags if blog_result else "" }}</p>
@@ -171,13 +172,28 @@
                 <span class="skeleton-line"></span>
               </div>
             </div>
-            <div class="result-card">
+            <div class="result-block">
               <h3>이미지 업로드</h3>
               <form method="post" enctype="multipart/form-data" id="imageUploadForm">
                 <input type="hidden" name="action" value="upload_image" />
                 <input type="file" name="image_file" accept="image/*" multiple />
                 <p class="meta">최대 2장</p>
               </form>
+              <form method="post" class="inline-action">
+                <input type="hidden" name="action" value="regenerate_images" />
+                <button
+                  type="submit"
+                  class="ghost-link"
+                  {% if not blog_result %}disabled{% endif %}
+                >
+                  {% if image_paths %}이미지만 재생성{% else %}이미지 생성{% endif %}
+                </button>
+              </form>
+              {% if not blog_result %}
+              <p class="meta">초안 생성 후 재생성할 수 있어요.</p>
+              {% elif not image_paths %}
+              <p class="meta">초안이 먼저 생성됩니다. 필요 시 이미지를 생성하세요.</p>
+              {% endif %}
               {% if image_paths %}
               <div class="meta">
                 {% for path in image_paths %}
@@ -188,10 +204,23 @@
             </div>
           </div>
         </section>
-        <section class="panel">
-          <div class="result-header">
-            <h2>작성 기록</h2>
-          </div>
+      </section>
+    </main>
+    <div class="side-panel" id="historyPanel" aria-hidden="true">
+      <div class="side-panel-overlay" data-close="true"></div>
+      <div
+        class="side-panel-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="historyPanelTitle"
+      >
+        <div class="side-panel-header">
+          <h2 id="historyPanelTitle">작성 기록</h2>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+        <div class="side-panel-body">
           {% if blog_history %}
           <div class="result-cards">
             {% for item in blog_history %}
@@ -208,9 +237,9 @@
           {% else %}
           <p class="meta">작성 기록이 없습니다.</p>
           {% endif %}
-        </section>
-      </section>
-    </main>
+        </div>
+      </div>
+    </div>
     <div class="modal" id="briefModal" aria-hidden="true">
       <div class="modal-overlay" data-close="true"></div>
       <div
@@ -298,6 +327,34 @@
       toggleScrollButton();
       scrollTopButton.addEventListener("click", () => {
         window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+
+    const openHistoryPanel = document.getElementById("openHistoryPanel");
+    const historyPanel = document.getElementById("historyPanel");
+    if (openHistoryPanel && historyPanel) {
+      const closePanel = () => {
+        historyPanel.classList.remove("open");
+        historyPanel.setAttribute("aria-hidden", "true");
+      };
+      const openPanel = () => {
+        historyPanel.classList.add("open");
+        historyPanel.setAttribute("aria-hidden", "false");
+      };
+      openHistoryPanel.addEventListener("click", openPanel);
+      historyPanel.addEventListener("click", (event) => {
+        if (
+          event.target &&
+          event.target.dataset &&
+          event.target.dataset.close
+        ) {
+          closePanel();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && historyPanel.classList.contains("open")) {
+          closePanel();
+        }
       });
     }
 

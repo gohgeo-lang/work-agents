@@ -4,23 +4,16 @@ import json
 import os
 import re
 import threading
+import logging
+import time
 from pathlib import Path
 
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 
 from agents.blog_writer import build_blog_prompt
+from agents.image_generator import generate_images
 from agents.naver_uploader import open_naver_writer
-from agents.shorts_agent import build_shorts_prompt
-from agents.shorts_voice_agent import build_voiceover
-from agents.shorts_image_agent import generate_images
-from agents.shorts_builder import build_short_video, build_srt_from_segments
-from agents.shorts_transcriber import (
-    transcribe_with_timestamps,
-    merge_segments_by_sentence,
-    split_long_segments,
-)
-from agents.wordpress_writer import WORDPRESS_SYSTEM_PROMPT
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -50,8 +43,6 @@ USED_VERSES_PATH = Path(os.environ.get("LFL_USED_VERSES", DEFAULT_USED_VERSES))
 THEMES_PATH = Path(os.environ.get("LFL_THEMES", DEFAULT_THEMES))
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-WORDPRESS_MODEL = os.environ.get("WORDPRESS_MODEL", "gpt-5.2")
-WORDPRESS_DIR = PROJECT_ROOT / "logs" / "wordpress"
 
 BRIEFS_DIR = PROJECT_ROOT / "briefs"
 LOG_PATH = PROJECT_ROOT / "logs" / "posters-log.csv"
@@ -61,7 +52,16 @@ SETTINGS_PATH = PROJECT_ROOT / "logs" / "settings.json"
 IMAGE_DIR = PROJECT_ROOT / "logs" / "generated-images"
 BLOG_LOG_PATH = PROJECT_ROOT / "logs" / "blog-log.csv"
 BLOG_IMAGE_MAP_PATH = PROJECT_ROOT / "logs" / "blog-images.json"
-SHORTS_PROGRESS_PATH = PROJECT_ROOT / "logs" / "shorts" / "progress.json"
+APP_LOG_PATH = PROJECT_ROOT / "logs" / "app.log"
+
+logger = logging.getLogger("lfl")
+if not logger.handlers:
+    APP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(APP_LOG_PATH, encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
@@ -297,12 +297,21 @@ def call_openai(prompt: str, system_prompt: str | None = None) -> dict:
         "text": {"format": {"type": "json_object"}},
     }
 
-    resp = requests.post(
-        "https://api.openai.com/v1/responses",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=90,
-    )
+    start = time.monotonic()
+    prompt_len = len(prompt)
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=90,
+        )
+    except Exception:
+        elapsed = time.monotonic() - start
+        logger.exception("OpenAI request failed model=%s prompt_len=%s elapsed=%.2fs", OPENAI_MODEL, prompt_len, elapsed)
+        raise
+    elapsed = time.monotonic() - start
+    logger.info("OpenAI response model=%s prompt_len=%s status=%s elapsed=%.2fs", OPENAI_MODEL, prompt_len, resp.status_code, elapsed)
     if resp.status_code >= 400:
         raise RuntimeError(f"OpenAI error {resp.status_code}: {resp.text}")
 
@@ -782,56 +791,6 @@ def build_used_entries(
     return entries
 
 
-def build_wordpress_prompt(selected_keyword: str, phase: str) -> str:
-    if phase == "keywords":
-        return "PHASE 1 only. Generate the 20-keyword list now."
-    return (
-        "PHASE 2 only.\n"
-        f"Selected keyword: \"{selected_keyword}\"\n"
-        "Generate the article now."
-    )
-
-
-def save_wordpress_keywords(keywords: list[str]) -> str:
-    WORDPRESS_DIR.mkdir(parents=True, exist_ok=True)
-    key_id = f"keywords_{dt.datetime.now().strftime('%Y%m%d%H%M%S')}_{os.urandom(2).hex()}"
-    path = WORDPRESS_DIR / f"{key_id}.json"
-    payload = {"keywords": keywords}
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return key_id
-
-
-def load_wordpress_keywords(key_id: str) -> list[str]:
-    if not key_id:
-        return []
-    path = WORDPRESS_DIR / f"{key_id}.json"
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        keywords = data.get("keywords", [])
-        return [str(item).strip() for item in keywords if str(item).strip()]
-    except json.JSONDecodeError:
-        return []
-
-
-def save_wordpress_result(text: str) -> str:
-    WORDPRESS_DIR.mkdir(parents=True, exist_ok=True)
-    result_id = f"article_{dt.datetime.now().strftime('%Y%m%d%H%M%S')}_{os.urandom(2).hex()}"
-    path = WORDPRESS_DIR / f"{result_id}.md"
-    path.write_text(text, encoding="utf-8")
-    return result_id
-
-
-def load_wordpress_result(result_id: str) -> str:
-    if not result_id:
-        return ""
-    path = WORDPRESS_DIR / f"{result_id}.md"
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
-
-
 def append_blog_log(data: dict, result: dict) -> None:
     BLOG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not BLOG_LOG_PATH.exists():
@@ -916,20 +875,6 @@ def load_blog_images(path: Path) -> dict[str, str]:
 
 
 def save_blog_images(path: Path, data: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load_shorts_progress(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def save_shorts_progress(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1349,69 +1294,6 @@ def home():
     return render_template("home.html")
 
 
-@app.route("/wordpress", methods=["GET", "POST"])
-def wordpress():
-    error = session.pop("flash_error", None)
-    notice = session.pop("flash_notice", None)
-    wordpress_result = load_wordpress_result(session.get("wordpress_result_id", ""))
-    keyword_list = load_wordpress_keywords(session.get("wordpress_keywords_id", ""))
-    selected_keyword = session.get("wordpress_selected_keyword", "")
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        if action == "generate_keywords":
-            try:
-                prompt = build_wordpress_prompt("", "keywords")
-                result = call_openai_text(
-                    prompt,
-                    system_prompt=WORDPRESS_SYSTEM_PROMPT,
-                    model=WORDPRESS_MODEL,
-                )
-                keywords = []
-                for raw in result.splitlines():
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    line = re.sub(r"^\d+[\\).\\s]+", "", line).strip()
-                    if line:
-                        keywords.append(line)
-                if not keywords:
-                    raise RuntimeError("키워드 목록을 가져오지 못했습니다.")
-                session["wordpress_keywords_id"] = save_wordpress_keywords(keywords)
-                session["wordpress_selected_keyword"] = ""
-                session["flash_notice"] = "키워드 20개를 생성했습니다."
-                return redirect(url_for("wordpress"))
-            except Exception as exc:
-                session["flash_error"] = str(exc)
-                return redirect(url_for("wordpress"))
-        if action == "generate_wordpress":
-            selected_keyword = request.form.get("selected_keyword", "").strip()
-            session["wordpress_selected_keyword"] = selected_keyword
-            if not selected_keyword:
-                session["flash_error"] = "키워드를 먼저 선택해 주세요."
-                return redirect(url_for("wordpress"))
-            try:
-                prompt = build_wordpress_prompt(selected_keyword, "article")
-                result = call_openai_text(
-                    prompt,
-                    system_prompt=WORDPRESS_SYSTEM_PROMPT,
-                    model=WORDPRESS_MODEL,
-                )
-                session["wordpress_result_id"] = save_wordpress_result(result)
-                session["flash_notice"] = "글을 생성했습니다."
-                return redirect(url_for("wordpress"))
-            except Exception as exc:
-                session["flash_error"] = str(exc)
-                return redirect(url_for("wordpress"))
-    return render_template(
-        "wordpress.html",
-        error=error,
-        notice=notice,
-        wordpress_result=wordpress_result,
-        keyword_list=keyword_list,
-        selected_keyword=selected_keyword,
-    )
-
-
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     notice = None
@@ -1446,249 +1328,6 @@ def brief():
         abort(404)
     content = target.read_text(encoding="utf-8")
     return render_template("brief.html", content=content, file=str(rel))
-
-
-@app.route("/shorts", methods=["GET", "POST"])
-def shorts():
-    if request.method == "GET" and not session.pop("preserve_shorts_result", False):
-        session.pop("last_shorts", None)
-        session.pop("shorts_make_status", None)
-        session.pop("shorts_outputs", None)
-        session.pop("shorts_steps", None)
-        SHORTS_PROGRESS_PATH.unlink(missing_ok=True)
-    result = session.get("last_result")
-    shorts_result = session.get("last_shorts")
-    progress = load_shorts_progress(SHORTS_PROGRESS_PATH)
-    make_status = progress.get("status") or session.get("shorts_make_status", "idle")
-    shorts_outputs = progress.get("outputs") or session.get("shorts_outputs", [])
-    shorts_steps = progress.get("steps") or session.get("shorts_steps", [])
-    error = session.pop("flash_error", None)
-    notice = session.pop("flash_notice", None)
-    themes = read_themes(THEMES_PATH)
-    used = read_used_verses(USED_VERSES_PATH)
-    used_theme_map = load_used_theme_map(LOG_PATH)
-    theme_overrides = load_theme_overrides(THEME_MAP_PATH)
-    used_theme_map.update(theme_overrides)
-    used_theme_map = {
-        verse: normalize_theme_display(theme, themes) for verse, theme in used_theme_map.items()
-    }
-    used_entries = build_used_entries(sorted(used), used_theme_map, themes)
-    selected_brief_label = session.get("shorts_selected_brief_label", "")
-
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        if action == "shorts_load_verse":
-            verse_ref = request.form.get("verse_reference", "").strip()
-            verse_ref = normalize_ref(verse_ref)
-            if not verse_ref:
-                error = "선택할 말씀이 없습니다."
-            else:
-                raw_theme = used_theme_map.get(verse_ref, "미분류")
-                theme_en, theme_ko = parse_theme(raw_theme)
-                result = {
-                    "theme_en": theme_en,
-                    "theme_ko": theme_ko,
-                    "theme_display": normalize_theme_display(raw_theme, themes)
-                    if raw_theme
-                    else "",
-                    "verse_reference": verse_ref,
-                    "verse_reference_en": "",
-                    "english_verse": "",
-                    "korean_verse": "",
-                    "anchor_text": "",
-                    "one_line_intent": "",
-                }
-                session["last_result"] = result
-                parts = [raw_theme or "미분류", verse_ref]
-                selected_brief_label = " · ".join(part for part in parts if part)
-                session["shorts_selected_brief_label"] = selected_brief_label
-            return render_template(
-                "shorts.html",
-                result=result,
-                shorts_result=shorts_result,
-                error=error,
-                notice=notice,
-                used_entries=used_entries,
-                selected_brief_label=selected_brief_label,
-            )
-        if action == "generate_shorts":
-            if not result:
-                session["flash_error"] = "기획 생성 결과가 없습니다. 먼저 기획을 생성해 주세요."
-                return redirect(url_for("shorts"))
-            tone = ""
-            length_seconds = request.form.get("length_seconds", "25초").strip()
-            cuts_raw = request.form.get("cuts_count", "4").strip()
-            try:
-                cuts_count = int(cuts_raw)
-            except ValueError:
-                cuts_count = 4
-            cuts_count = max(3, min(5, cuts_count))
-            extra_prompt = request.form.get("extra_prompt", "").strip()
-            prompt = build_shorts_prompt(
-                result,
-                tone,
-                length_seconds,
-                cuts_count,
-                extra_prompt,
-            )
-            try:
-                shorts_result = call_openai(
-                    prompt,
-                    system_prompt=(
-                        "You are a short-form video producer. "
-                        "Return only strict JSON with no extra commentary."
-                    ),
-                )
-                session["last_shorts"] = shorts_result
-                session["shorts_make_status"] = "ready"
-                session["shorts_outputs"] = []
-                session["shorts_length_seconds"] = length_seconds
-                session["shorts_uploaded_images"] = []
-                session["preserve_shorts_result"] = True
-                session["flash_notice"] = "숏츠 초안을 생성했습니다."
-                return redirect(url_for("shorts"))
-            except Exception as exc:
-                session["flash_error"] = str(exc)
-                return redirect(url_for("shorts"))
-        if action == "upload_shorts_images":
-            files = request.files.getlist("shorts_images")
-            files = [file for file in files if file and file.filename]
-            if not files:
-                session["flash_error"] = "이미지 파일을 선택해 주세요."
-                return redirect(url_for("shorts"))
-            output_dir = PROJECT_ROOT / "logs" / "shorts" / "uploads"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            saved_paths: list[str] = []
-            for file in files:
-                safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", file.filename)
-                timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-                dest = output_dir / f"{timestamp}_{safe_name}"
-                file.save(dest)
-                saved_paths.append(str(dest))
-            session["shorts_uploaded_images"] = saved_paths
-            session["preserve_shorts_result"] = True
-            session["flash_notice"] = "이미지를 업로드했습니다."
-            return redirect(url_for("shorts"))
-        if action == "make_shorts":
-            if not shorts_result:
-                session["flash_error"] = "먼저 초안을 생성해 주세요."
-                return redirect(url_for("shorts"))
-            voice = request.form.get("voice", "alloy").strip() or "alloy"
-            raw_length = session.get("shorts_length_seconds", "60초")
-            try:
-                total_seconds = float(re.sub(r"[^0-9.]", "", str(raw_length)) or 60)
-            except ValueError:
-                total_seconds = 60.0
-            save_shorts_progress(
-                SHORTS_PROGRESS_PATH,
-                {"status": "in_progress", "steps": ["작업 시작"], "outputs": []},
-            )
-
-            def run_shorts_job(payload: dict) -> None:
-                try:
-                    script_text = (payload.get("script") or "").strip()
-                    if not script_text:
-                        raise RuntimeError("스크립트가 비어 있습니다.")
-                    output_dir = PROJECT_ROOT / "logs" / "shorts"
-                    progress_data = load_shorts_progress(SHORTS_PROGRESS_PATH)
-                    steps = progress_data.get("steps", [])
-                    steps.append("나레이션 생성 중...")
-                    save_shorts_progress(SHORTS_PROGRESS_PATH, {**progress_data, "steps": steps})
-                    voice_path = build_voiceover(script_text, output_dir, voice=payload["voice"])
-                    progress_data = load_shorts_progress(SHORTS_PROGRESS_PATH)
-                    steps = progress_data.get("steps", [])
-                    steps.append("자막 타임코드 생성 중...")
-                    save_shorts_progress(SHORTS_PROGRESS_PATH, {**progress_data, "steps": steps})
-                    segments = transcribe_with_timestamps(voice_path)
-                    merged_segments = merge_segments_by_sentence(segments)
-                    merged_segments = split_long_segments(merged_segments)
-                    srt_path = output_dir / "shorts_video.srt"
-                    build_srt_from_segments(merged_segments, srt_path)
-                    progress_data = load_shorts_progress(SHORTS_PROGRESS_PATH)
-                    steps = progress_data.get("steps", [])
-                    steps.append("이미지 준비 중...")
-                    save_shorts_progress(SHORTS_PROGRESS_PATH, {**progress_data, "steps": steps})
-                    image_paths = payload.get("image_paths", [])
-                    image_paths = [Path(path) for path in image_paths if path and Path(path).exists()]
-                    if not image_paths:
-                        image_prompts = payload.get("image_prompts", [])
-                        if not isinstance(image_prompts, list) or not image_prompts:
-                            raise RuntimeError("이미지 프롬프트가 없습니다.")
-                        images_dir = output_dir / "images"
-                        image_paths = generate_images(image_prompts, images_dir)
-                    progress_data = load_shorts_progress(SHORTS_PROGRESS_PATH)
-                    steps = progress_data.get("steps", [])
-                    steps.append("영상 합성 중...")
-                    save_shorts_progress(SHORTS_PROGRESS_PATH, {**progress_data, "steps": steps})
-                    video_path = output_dir / "shorts_video.mp4"
-                    build_short_video(
-                        image_paths=image_paths,
-                        audio_path=voice_path,
-                        script=script_text,
-                        title=shorts_result.get("title", ""),
-                        output_path=video_path,
-                        total_seconds=payload["total_seconds"],
-                        srt_path=srt_path,
-                    )
-                    outputs = [{"label": "나레이션 오디오", "path": str(voice_path)}]
-                    for idx, path in enumerate(image_paths, start=1):
-                        outputs.append({"label": f"컷 이미지 {idx}", "path": str(path)})
-                    outputs.append({"label": "숏츠 영상", "path": str(video_path)})
-                    save_shorts_progress(
-                        SHORTS_PROGRESS_PATH,
-                        {"status": "done", "steps": steps + ["완료"], "outputs": outputs},
-                    )
-                except Exception as exc:
-                    save_shorts_progress(
-                        SHORTS_PROGRESS_PATH,
-                        {"status": "error", "steps": [str(exc)], "outputs": []},
-                    )
-
-            thread = threading.Thread(
-                target=run_shorts_job,
-                kwargs={
-                    "payload": {
-                        "script": shorts_result.get("script", ""),
-                        "image_paths": session.get("shorts_uploaded_images", []),
-                        "image_prompts": shorts_result.get("image_prompts", []),
-                        "voice": voice,
-                        "total_seconds": total_seconds,
-                    }
-                },
-                daemon=True,
-            )
-            thread.start()
-            session["preserve_shorts_result"] = True
-            session["flash_notice"] = "숏츠 제작을 시작했습니다."
-            return redirect(url_for("shorts"))
-
-    return render_template(
-        "shorts.html",
-        result=result,
-        shorts_result=shorts_result,
-        make_status=make_status,
-        shorts_outputs=shorts_outputs,
-        shorts_steps=shorts_steps,
-        error=error,
-        notice=notice,
-        used_entries=used_entries,
-        selected_brief_label=selected_brief_label,
-    )
-
-
-@app.route("/shorts/status", methods=["GET"])
-def shorts_status():
-    progress = load_shorts_progress(SHORTS_PROGRESS_PATH)
-    if not progress:
-        return jsonify({"status": "idle", "steps": [], "outputs": []})
-    status = progress.get("status", "idle")
-    outputs = progress.get("outputs", [])
-    steps = progress.get("steps", [])
-    if status == "in_progress" and outputs:
-        status = "done"
-        if not steps or steps[-1] != "완료":
-            steps = steps + ["완료"]
-    return jsonify({"status": status, "steps": steps, "outputs": outputs})
 
 
 @app.route("/blog", methods=["GET", "POST"])
@@ -1750,6 +1389,35 @@ def blog():
                 session["last_image_paths"] = saved_paths
                 session["preserve_blog_result"] = True
                 session["flash_notice"] = "이미지를 업로드했습니다."
+            return redirect(url_for("blog"))
+        if action == "regenerate_images":
+            if not blog_result:
+                session["flash_error"] = "먼저 블로그 글을 생성해 주세요."
+                return redirect(url_for("blog"))
+            if not draft_id:
+                session["flash_error"] = "초안 ID를 찾을 수 없습니다. 다시 생성해 주세요."
+                return redirect(url_for("blog"))
+            if not isinstance(image_prompt, list) or not image_prompt:
+                session["flash_error"] = "이미지 프롬프트가 없습니다. 초안을 다시 생성해 주세요."
+                return redirect(url_for("blog"))
+            prompts = [item["text"] for item in image_prompt if isinstance(item, dict) and item.get("text")]
+            if not prompts:
+                session["flash_error"] = "이미지 프롬프트가 비어 있습니다."
+                return redirect(url_for("blog"))
+            try:
+                images_dir = PROJECT_ROOT / "logs" / "blog-images"
+                generated_paths = generate_images(prompts, images_dir, size="1024x1024")
+                if generated_paths:
+                    blog_images[str(draft_id)] = [str(path) for path in generated_paths]
+                    save_blog_images(BLOG_IMAGE_MAP_PATH, blog_images)
+                    session["last_image_paths"] = [str(path) for path in generated_paths]
+                    session["preserve_blog_result"] = True
+                    session["flash_notice"] = "이미지를 다시 생성했습니다."
+                else:
+                    session["flash_error"] = "이미지 생성 결과가 없습니다."
+            except Exception as exc:
+                logger.exception("Blog image regeneration failed")
+                session["flash_error"] = f"블로그 이미지 재생성 실패: {exc}"
             return redirect(url_for("blog"))
         if action == "load_used_verse":
             verse_ref = request.form.get("verse_reference", "").strip()
@@ -1908,19 +1576,10 @@ def blog():
                         },
                     ]
                     session["last_image_prompt"] = image_prompt
-                    try:
-                        prompts = [item["text"] for item in image_prompt]
-                        images_dir = PROJECT_ROOT / "logs" / "blog-images"
-                        generated_paths = generate_images(prompts, images_dir, size="1024x1024")
-                        if draft_id:
-                            blog_images[str(draft_id)] = [str(path) for path in generated_paths]
-                            save_blog_images(BLOG_IMAGE_MAP_PATH, blog_images)
-                            session["last_image_paths"] = [str(path) for path in generated_paths]
-                    except Exception as exc:
-                        session["flash_error"] = f"블로그 이미지 생성 실패: {exc}"
-                    session["flash_notice"] = "초안을 생성했습니다."
+                    session["flash_notice"] = "초안을 생성했습니다. 이미지가 필요하면 생성 버튼을 눌러주세요."
                     return redirect(url_for("blog"))
                 except Exception as exc:
+                    logger.exception("Blog draft generation failed")
                     session["flash_error"] = str(exc)
                     return redirect(url_for("blog"))
     return render_template(
