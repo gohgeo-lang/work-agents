@@ -6,10 +6,11 @@ import re
 import threading
 import logging
 import time
+import uuid
 from pathlib import Path
 
 import requests
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for, send_file
 
 from agents.blog_writer import build_blog_prompt
 from agents.image_generator import generate_images
@@ -65,6 +66,151 @@ if not logger.handlers:
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
+
+BLOG_JOBS: dict[str, dict] = {}
+BLOG_JOBS_LOCK = threading.Lock()
+IMAGE_JOBS: dict[str, dict] = {}
+IMAGE_JOBS_LOCK = threading.Lock()
+PLANNER_JOBS: dict[str, dict] = {}
+PLANNER_JOBS_LOCK = threading.Lock()
+
+
+def init_blog_job() -> str:
+    job_id = uuid.uuid4().hex
+    with BLOG_JOBS_LOCK:
+        BLOG_JOBS[job_id] = {
+            "status": "running",
+            "progress": 0,
+            "logs": [],
+            "error": None,
+            "result": None,
+        }
+    return job_id
+
+
+def update_blog_job(job_id: str, *, status: str | None = None, progress: int | None = None) -> None:
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+        if not job:
+            return
+        if status is not None:
+            job["status"] = status
+        if progress is not None:
+            job["progress"] = progress
+
+
+def append_blog_job_log(job_id: str, message: str, progress: int | None = None) -> None:
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+        if not job:
+            return
+        job["logs"].append(message)
+        if progress is not None:
+            job["progress"] = progress
+
+
+def complete_blog_job(job_id: str, result: dict) -> None:
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "completed"
+        job["progress"] = 100
+        job["result"] = result
+
+
+def fail_blog_job(job_id: str, message: str) -> None:
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "failed"
+        job["error"] = message
+
+
+def init_image_job() -> str:
+    job_id = uuid.uuid4().hex
+    with IMAGE_JOBS_LOCK:
+        IMAGE_JOBS[job_id] = {
+            "status": "running",
+            "progress": 0,
+            "logs": [],
+            "error": None,
+            "result": None,
+        }
+    return job_id
+
+
+def append_image_job_log(job_id: str, message: str, progress: int | None = None) -> None:
+    with IMAGE_JOBS_LOCK:
+        job = IMAGE_JOBS.get(job_id)
+        if not job:
+            return
+        job["logs"].append(message)
+        if progress is not None:
+            job["progress"] = progress
+
+
+def complete_image_job(job_id: str, result: dict) -> None:
+    with IMAGE_JOBS_LOCK:
+        job = IMAGE_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "completed"
+        job["progress"] = 100
+        job["result"] = result
+
+
+def fail_image_job(job_id: str, message: str) -> None:
+    with IMAGE_JOBS_LOCK:
+        job = IMAGE_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "failed"
+        job["error"] = message
+
+
+def init_planner_job(job_type: str) -> str:
+    job_id = uuid.uuid4().hex
+    with PLANNER_JOBS_LOCK:
+        PLANNER_JOBS[job_id] = {
+            "status": "running",
+            "progress": 0,
+            "logs": [],
+            "error": None,
+            "result": None,
+            "type": job_type,
+        }
+    return job_id
+
+
+def append_planner_job_log(job_id: str, message: str, progress: int | None = None) -> None:
+    with PLANNER_JOBS_LOCK:
+        job = PLANNER_JOBS.get(job_id)
+        if not job:
+            return
+        job["logs"].append(message)
+        if progress is not None:
+            job["progress"] = progress
+
+
+def complete_planner_job(job_id: str, result: dict) -> None:
+    with PLANNER_JOBS_LOCK:
+        job = PLANNER_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "completed"
+        job["progress"] = 100
+        job["result"] = result
+
+
+def fail_planner_job(job_id: str, message: str) -> None:
+    with PLANNER_JOBS_LOCK:
+        job = PLANNER_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "failed"
+        job["error"] = message
 
 
 def load_settings(path: Path) -> dict:
@@ -315,9 +461,17 @@ def call_openai(prompt: str, system_prompt: str | None = None) -> dict:
     if resp.status_code >= 400:
         raise RuntimeError(f"OpenAI error {resp.status_code}: {resp.text}")
 
-    text = extract_output_text(resp.json())
+    resp_json = resp.json()
+    text = extract_output_text(resp_json)
     if not text:
         raise RuntimeError("Empty response from OpenAI")
+    usage = resp_json.get("usage")
+    logger.info(
+        "OpenAI output model=%s output_len=%s usage=%s",
+        OPENAI_MODEL,
+        len(text),
+        usage,
+    )
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
@@ -392,16 +546,18 @@ def select_new_verse(theme: str, used: set[str]) -> str:
 def build_prompt(
     theme: str,
     size: str,
-    tone: str,
-    notes: str,
+    verse_ref: str,
     used: set[str],
     themes: list[str],
     color_mode: str,
+    extra_prompt: str,
 ) -> str:
     themes_block = "\n".join(themes) if themes else "(themes unavailable)"
     used_block = "\n".join(sorted(used)) if used else "(none)"
 
     color_text = color_mode or "(not specified)"
+    extra_block = extra_prompt.strip()
+    extra_text = f"\n추가 요청:\n{extra_block}\n" if extra_block else ""
     return f"""
 SYSTEM INSTRUCTION
 
@@ -524,7 +680,7 @@ SYSTEM INSTRUCTION
 아래 성경 구절을 사용해 기획서를 작성하라.
 
 [입력 구절]
-- 성경 구절 (ESV): {notes or '(none)'}
+- 성경 구절 (ESV): {verse_ref or '(none)'}
 
 프로젝트 정보:
 - Themes list:\n{themes_block}
@@ -533,10 +689,10 @@ SYSTEM INSTRUCTION
 - Do NOT recommend or return any verse from the used list.
 - Size: {size} vertical.
 - Color mode: {color_text}
-- Tone keywords: {tone or '(none)'}
 - Translations: English = ESV, Korean = 개역개정
 - verse_reference는 반드시 한글 책 이름 형식으로만 작성 (예: 히브리서 11:1). 쉼표/마침표 금지.
 - verse_reference_en은 반드시 영문 책 이름 형식으로만 작성 (예: 2 Corinthians 5:7).
+{extra_text}
 
 반드시 JSON으로만 응답. 아래 구조를 유지:
 {{
@@ -557,6 +713,72 @@ SYSTEM INSTRUCTION
   "one_line_intent": ""
 }}
 """
+
+
+def build_planner_story_prompt(
+    theme: str,
+    themes: list[str],
+    used: set[str],
+    verse_ref: str,
+    color_mode: str,
+    extra_prompt: str,
+) -> str:
+    series = "\n  1) The Ground Beneath(믿음) 2) Even So, Light(소망/위로) 3) Held Quietly(사랑)\n  4) The Gentle Joy(감사/기쁨) 5) Still Waters(평안/인도하심)\n  6) The Listening Room(기도/묵상) 7) Walk Bold(결단/용기/행동) 8) Known and Named(정체성/존재)"
+    used_block = "\n".join(sorted(used)) if used else "(none)"
+    extra_block = extra_prompt.strip()
+    extra_text = f"\n- 내가 쓴 묵상 원문(또는 요약): {extra_block}\n" if extra_block else ""
+    return f"""
+SYSTEM
+너는 네이버 블로그에 올릴 ‘성경 말씀 타이포그래피 포스터 제작기/기획기’ 전문 작가다.
+글은 줄글 중심으로 자연스럽게 읽히되, 필요한 정보는 짧은 표로만 정리한다.
+톤은 담담하고 과장 없으며, ‘내가 실제로 느낀 감정과 의도’를 중심으로 설명한다.
+광고처럼 보이면 안 된다. 판매 유도 문구/가격/구매 링크는 넣지 않는다(요청 시에만).
+모든 내용은 사용자가 제공한 묵상/포스터 정보를 기반으로 하고, 모르면 단정하지 말고 “내가 이렇게 느꼈다/의도했다”로 표현한다.
+
+OUTPUT RULES (고정)
+- 전체 길이: 대략 3000자 내외(지금 글 정도의 밀도)
+- 구성: H1 1개 + 소제목 6~8개 정도
+- 표는 2~3개 이하, 각 표는 2열(항목/내용) 또는 3열(구분/본문/비고)로 짧게
+- 문단은 짧게(2~4문장), 호흡 빠르게
+- 마지막에 해시태그 8~12개(주제/구절/시리즈/분위기 중심)
+- 반드시 포함할 섹션:
+  1) 도입(왜 이 구절이었는지/왜 포스터였는지)
+  2) 8테마 중 어디인지 + 시리즈명
+  3) 말씀(ESV + 개역개정) 표 1개
+  4) 핵심 의미 ‘한 문장’ 요약
+  5) 감정 포인트 3개(줄글로)
+  6) 디자인 기획(타이포 위계, NOW 같은 장치, 흑백/컬러, 여백 의도)
+  7) 제작 정보/의도 요약 표 1개(테마/앵커텍스트/키감정/디자인포인트/공간의도)
+  8) 어울리는 공간/위하고 싶은 사람(줄글)
+  9) 마무리(기획 의도/내가 남기고 싶은 결론)
+
+USER (입력값)
+[브랜드/프로젝트]
+- 브랜드명: 고즈넉씨스튜디오(Gozneokssi Studio)
+- 프로젝트명: LETTER FOR LIVING
+- 시리즈(8테마): {series}
+
+[이번 포스터 기본 정보]
+- 구절 레퍼런스: {verse_ref or "(미정)"}
+- ESV 본문: (구절 레퍼런스에 맞는 본문을 포함)
+- 개역개정 본문: (구절 레퍼런스에 맞는 본문을 포함)
+- 8테마/시리즈 선택: {theme}
+- 포스터 핵심 장치: (본문에서 장치/위계를 자연스럽게 설명)
+- 포스터를 만들며 의도한 키워드 5개: (본문에서 키워드로 정리)
+- 이 포스터가 어울리는 공간 2~4곳: (본문에서 제안)
+- 위하고 싶은 사람 2~4유형: (본문에서 제안)
+- 앵커텍스트 후보 1~2개: (본문에서 제안)
+- 제작도수(컬러): {color_mode or "(미지정)"}
+- 이미 사용된 구절은 피한다: {used_block}
+{extra_text}
+
+[추가 제약]
+- ‘제작기/기획기’ 느낌이 나게: 의도/선택/구조 중심으로
+- 너무 신학 강의처럼 쓰지 말고, 내 감정과 기준을 담백히
+- 구매 유도 금지(요청 시 제외)
+
+이 입력값을 바탕으로, 위 OUTPUT RULES의 구조와 길이를 그대로 지켜 네이버 블로그용 글을 완성해줘.
+""".strip()
 
 
 
@@ -830,9 +1052,17 @@ def normalize_blog_result(payload: dict) -> dict:
             idx -= 1
         if idx >= 0:
             last_line = lines[idx].strip()
-            if not hashtags and has_hashtag_line(last_line):
-                hashtags = last_line
-                lines = lines[:idx]
+            if has_hashtag_line(last_line):
+                if not hashtags:
+                    hash_pos = last_line.find("#")
+                    prefix = last_line[:hash_pos].strip() if hash_pos >= 0 else ""
+                    hashtags = last_line[hash_pos:].strip() if hash_pos >= 0 else last_line
+                    if prefix:
+                        lines[idx] = prefix
+                    else:
+                        lines = lines[:idx]
+                elif last_line == hashtags:
+                    lines = lines[:idx]
             elif hashtags and last_line == hashtags:
                 lines = lines[:idx]
         while lines and not lines[-1].strip():
@@ -843,6 +1073,53 @@ def normalize_blog_result(payload: dict) -> dict:
     payload["body"] = body
     payload["hashtags"] = hashtags
     return payload
+
+
+def parse_blog_full_text(full_text: str) -> tuple[str, str, str]:
+    lines = [line.rstrip() for line in full_text.splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    title = lines[0].strip() if lines else ""
+    hashtags = ""
+    if lines:
+        for idx in range(len(lines) - 1, -1, -1):
+            line = lines[idx].strip()
+            if not line:
+                continue
+            if re.search(r"#\\S+", line):
+                hashtags = line
+                lines = lines[:idx]
+            break
+    body_lines = lines[1:] if len(lines) > 1 else []
+    while body_lines and not body_lines[0].strip():
+        body_lines.pop(0)
+    body = "\n".join(body_lines).strip()
+    return title, body, hashtags
+
+
+def strip_hashtag_line(text: str) -> str:
+    lines = [line.rstrip() for line in text.splitlines()]
+    idx = len(lines) - 1
+    while idx >= 0 and not lines[idx].strip():
+        idx -= 1
+    if idx >= 0 and re.search(r"#\\S+", lines[idx].strip()):
+        lines = lines[:idx]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def find_missing_sections(body: str) -> list[str]:
+    required = ["배경", "의미", "묵상", "체크리스트", "되짚어볼 질문", "요약"]
+    present: set[str] = set()
+    for line in body.splitlines():
+        normalized = line.strip()
+        match = re.match(r"^(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*$", normalized)
+        if match:
+            present.add(match.group(1))
+    return [section for section in required if section not in present]
 
 
 def load_blog_history(limit: int = 30) -> list[dict[str, str]]:
@@ -1036,8 +1313,11 @@ def planner():
     new_verse = request.args.get("new") if request.args.get("new") else None
     if request.method == "GET" and not session.pop("preserve_planner_result", False):
         session.pop("last_result", None)
+        session.pop("last_planner_story", None)
     result = session.get("last_result")
+    planner_story = session.get("last_planner_story", "")
     selected_theme = ""
+    poster_sketch_variant = session.get("poster_sketch_variant", 0)
 
     if request.method == "POST":
         action = request.form.get("action", "").strip()
@@ -1113,6 +1393,10 @@ def planner():
                 new_verse = verse_ref
             used = read_used_verses(USED_VERSES_PATH)
             return redirect(url_for("planner", notice=notice, error=error, new=new_verse))
+        if action == "regenerate_sketch":
+            session["poster_sketch_variant"] = (poster_sketch_variant + 1) % 2
+            session["preserve_planner_result"] = True
+            return redirect(url_for("planner", notice="텍스트 스케치를 다시 생성했습니다."))
 
         theme = request.form.get("theme", "").strip()
         selected_theme = theme
@@ -1122,151 +1406,58 @@ def planner():
         color_mode = request.form.get("color_mode", "").strip()
         if not theme:
             error = "주제를 선택해 주세요."
-        elif not size_family:
-            error = "규격표준을 선택해 주세요."
-        elif not color_mode:
-            error = "제작도수(컬러)를 선택해 주세요."
         elif size_family == "custom" and not custom_size:
             error = "직접입력 사이즈를 입력해 주세요."
         if custom_size:
             size = custom_size
-        tone = request.form.get("tone", "").strip()
-        notes = request.form.get("notes", "").strip()
+        extra_prompt = request.form.get("extra_prompt", "").strip()
         chosen_verse = ""
 
         if not error and theme not in themes:
             error = "주제를 8가지 중에서 선택해 주세요."
-        if not error and notes:
-            note_text = notes.strip()
-            if note_text:
-                for used_ref in used:
-                    if used_ref and used_ref in note_text:
-                        error = "이미 제작된 말씀입니다. 다른 말씀으로 다시 시도해 주세요."
-                        break
-                if not error:
-                    chosen_verse = note_text
         if not error and not chosen_verse:
             chosen_verse = select_new_verse(theme, used)
             if not chosen_verse:
                 error = "새로운 말씀을 찾지 못했습니다. 다시 시도해 주세요."
         if not error:
-            prompt = build_prompt(theme, size, tone, chosen_verse, used, themes, color_mode)
             try:
-                result = None
-                verse_ref = ""
-                retry_note = ""
-                for _ in range(6):
-                    result = call_openai(prompt + retry_note)
-                    result["color_mode"] = color_mode
-                    verse_ref = normalize_ref(result.get("verse_reference", ""))
-                    if not verse_ref:
-                        retry_note = "\n\n주의: verse_reference가 비어 있습니다. 반드시 채워주세요."
-                        continue
-                    if verse_ref in used:
-                        retry_note = (
-                            f"\n\n주의: 직전 결과가 사용된 말씀({verse_ref})이었습니다. "
-                            "반드시 다른 구절을 선택하세요."
-                        )
-                        continue
-                    english_verse = str(result.get("english_verse", "")).strip()
-                    korean_verse = str(result.get("korean_verse", "")).strip()
-                    if not english_verse or not korean_verse:
-                        retry_note = (
-                            "\n\n주의: english_verse 또는 korean_verse가 비어 있습니다. "
-                            "ESV 영어 본문과 개역개정 한글 본문을 모두 작성하세요."
-                        )
-                        continue
-                    verse_reference_en = str(result.get("verse_reference_en", "")).strip()
-                    if not verse_reference_en or not has_latin(verse_reference_en):
-                        retry_note = (
-                            "\n\n주의: verse_reference_en이 비어 있거나 영어 책 이름이 아닙니다. "
-                            "예: 2 Corinthians 5:7"
-                        )
-                        continue
-                    korean_only_fields = [
-                        "meaning_core",
-                        "meaning_emotion",
-                        "meaning_moment",
-                        "spatial_context",
-                        "one_line_intent",
-                    ]
-                    bad_field = ""
-                    for key in korean_only_fields:
-                        if has_latin(str(result.get(key, ""))):
-                            bad_field = key
-                            break
-                    if bad_field:
-                        retry_note = (
-                            f"\n\n주의: {bad_field} 필드에 영어가 포함되었습니다. "
-                            "해당 필드들은 반드시 한국어로만 작성하세요."
-                        )
-                        continue
-                    emphasis_most = str(result.get("emphasis_most", "")).strip()
-                    emphasis_can_drop = str(result.get("emphasis_can_drop", "")).strip()
-                    if (
-                        not emphasis_most
-                        or not emphasis_can_drop
-                        or not english_verse
-                        or not emphasis_most.lower() in english_verse.lower()
-                        or not emphasis_can_drop.lower() in english_verse.lower()
-                        or not has_latin(emphasis_most)
-                        or not has_latin(emphasis_can_drop)
-                    ):
-                        retry_note = (
-                            "\n\n주의: emphasis_most/emphasis_can_drop는 "
-                            "english_verse에서 그대로 발췌한 영어 구절이어야 합니다."
-                        )
-                        continue
-                    design_guide = str(result.get("design_guide", "")).strip()
-                    if (
-                        not design_guide
-                        or emphasis_most.lower() not in design_guide.lower()
-                        or emphasis_can_drop.lower() not in design_guide.lower()
-                    ):
-                        retry_note = (
-                            "\n\n주의: design_guide에는 emphasis_most와 "
-                            "emphasis_can_drop를 영어 원문 그대로 포함해야 합니다."
-                        )
-                        continue
-                    design_guide_cleaned = re.sub(r"\"[^\"]*\"", "", design_guide)
-                    if has_latin(design_guide_cleaned):
-                        retry_note = (
-                            "\n\n주의: design_guide 설명은 한국어로만 작성하세요. "
-                            "영어는 따옴표 안의 발췌 구절만 허용됩니다."
-                        )
-                        continue
-                    one_line_intent = str(result.get("one_line_intent", "")).strip()
-                    if notes and one_line_intent and one_line_intent in notes:
-                        retry_note = (
-                            "\n\n주의: one_line_intent가 메모 문구를 그대로 복사했습니다. "
-                            "새로운 한국어 문장으로 다시 작성하세요."
-                        )
-                        continue
-                    break
-                if not verse_ref or verse_ref in used:
-                    raise RuntimeError("새로운 말씀을 찾지 못했습니다. 다시 시도해 주세요.")
-                result["verse_reference"] = verse_ref
+                verse_ref = chosen_verse
                 theme_en, theme_ko = parse_theme(theme)
-                result["theme_en"] = theme_en
-                result["theme_ko"] = theme_ko
-                result["theme_display"] = selected_theme
+                result = {
+                    "verse_reference": verse_ref,
+                    "theme_display": selected_theme,
+                    "theme_en": theme_en,
+                    "theme_ko": theme_ko,
+                }
+                story_prompt = build_planner_story_prompt(
+                    selected_theme,
+                    themes,
+                    used,
+                    verse_ref,
+                    color_mode,
+                    extra_prompt,
+                )
+                story_text = call_openai_text(
+                    story_prompt,
+                    system_prompt="Follow the instructions exactly.",
+                ).strip()
 
                 BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
 
                 if selected_theme in themes:
                     save_theme_override(THEME_MAP_PATH, verse_ref, selected_theme)
 
-                theme_slug = slugify(result.get("theme_en", ""))
+                theme_slug = slugify(theme_en)
                 verse_slug = slugify(verse_ref.replace(":", "-"))
                 date_tag = dt.date.today().strftime("%Y%m%d")
                 base_name = f"{date_tag}_{theme_slug}_{verse_slug}"
 
-                brief_text = write_brief(result, size)
-                brief_path = BRIEFS_DIR / f"{base_name}.md"
-                brief_path.write_text(brief_text, encoding="utf-8")
+                brief_path = BRIEFS_DIR / f"{base_name}_story.md"
+                brief_path.write_text(story_text, encoding="utf-8")
 
                 append_log(result, size, brief_path)
                 session["last_result"] = result
+                session["last_planner_story"] = story_text
                 session["preserve_planner_result"] = True
                 return redirect(url_for("planner", notice="기획서가 생성되었습니다."))
             except Exception as exc:
@@ -1285,8 +1476,92 @@ def planner():
         notice=notice,
         new_verse=new_verse,
         result=result,
+        planner_story=planner_story,
         selected_theme=selected_theme,
+        poster_sketch_variant=poster_sketch_variant,
     )
+
+
+@app.post("/planner/start")
+def planner_start():
+    theme = request.form.get("theme", "").strip()
+    size_family = request.form.get("size_family", "").strip()
+    size = request.form.get("size", "A2").strip()
+    custom_size = request.form.get("custom_size", "").strip()
+    color_mode = request.form.get("color_mode", "").strip()
+    extra_prompt = request.form.get("extra_prompt", "").strip()
+    if not theme:
+        return jsonify({"error": "주제를 선택해 주세요."}), 400
+    job_id = init_planner_job("generate")
+    thread = threading.Thread(
+        target=run_planner_generation_job,
+        kwargs={
+            "job_id": job_id,
+            "theme": theme,
+            "size_family": size_family,
+            "size": size,
+            "custom_size": custom_size,
+            "color_mode": color_mode,
+            "extra_prompt": extra_prompt,
+        },
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"job_id": job_id})
+
+
+@app.post("/planner/sketch/start")
+def planner_sketch_start():
+    current_variant = session.get("poster_sketch_variant", 0)
+    next_variant = (current_variant + 1) % 2
+    job_id = init_planner_job("sketch")
+    thread = threading.Thread(
+        target=run_sketch_regeneration_job,
+        kwargs={"job_id": job_id, "variant": next_variant},
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/planner/status/<job_id>")
+def planner_status(job_id: str):
+    with PLANNER_JOBS_LOCK:
+        job = PLANNER_JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+        return jsonify(
+            {
+                "status": job["status"],
+                "progress": job["progress"],
+                "logs": job["logs"],
+                "error": job["error"],
+                "type": job.get("type"),
+            }
+        )
+
+
+@app.post("/planner/finalize/<job_id>")
+def planner_finalize(job_id: str):
+    with PLANNER_JOBS_LOCK:
+        job = PLANNER_JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+    if job["status"] != "completed" or not job.get("result"):
+        return jsonify({"error": "아직 완료되지 않았습니다."}), 400
+    payload = job["result"]
+    if job.get("type") == "generate":
+        session["last_result"] = payload.get("result")
+        session["last_planner_story"] = payload.get("story", "")
+        session["preserve_planner_result"] = True
+        session["flash_notice"] = "기획서가 생성되었습니다."
+    elif job.get("type") == "sketch":
+        session["poster_sketch_variant"] = payload.get("variant", 0)
+        session["preserve_planner_result"] = True
+        session["flash_notice"] = "텍스트 스케치를 다시 생성했습니다."
+    with PLANNER_JOBS_LOCK:
+        PLANNER_JOBS.pop(job_id, None)
+    return jsonify({"ok": True})
 
 
 @app.route("/")
@@ -1330,6 +1605,344 @@ def brief():
     return render_template("brief.html", content=content, file=str(rel))
 
 
+@app.get("/blog/image")
+def blog_image():
+    raw = request.args.get("path", "").strip()
+    if not raw:
+        abort(404)
+    target = Path(raw).expanduser()
+    try:
+        target = target.resolve()
+        target.relative_to(PROJECT_ROOT)
+    except ValueError:
+        abort(403)
+    if not target.exists() or not target.is_file():
+        abort(404)
+    return send_file(target)
+
+
+@app.post("/blog/start")
+def start_blog_job():
+    result = session.get("last_result")
+    if not result:
+        return jsonify({"error": "기획 생성 결과가 없습니다. 먼저 기획을 생성해 주세요."}), 400
+    hashtags_count = int(request.form.get("hashtags_count", "7") or 7)
+    site_link = request.form.get("site_link", "").strip()
+    job_id = init_blog_job()
+    thread = threading.Thread(
+        target=run_blog_generation_job,
+        kwargs={
+            "job_id": job_id,
+            "base_result": dict(result),
+            "hashtags_count": hashtags_count,
+            "site_link": site_link,
+        },
+        daemon=True,
+    )
+    thread.start()
+    session["current_blog_job"] = job_id
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/blog/status/<job_id>")
+def blog_job_status(job_id: str):
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+        return jsonify(
+            {
+                "status": job["status"],
+                "progress": job["progress"],
+                "logs": job["logs"],
+                "error": job["error"],
+            }
+        )
+
+
+@app.post("/blog/images/start")
+def start_image_job():
+    draft_id = session.get("current_draft_id")
+    image_prompt = session.get("last_image_prompt")
+    blog_result = session.get("last_blog")
+    if not blog_result:
+        return jsonify({"error": "먼저 초안을 생성해 주세요."}), 400
+    if not draft_id:
+        return jsonify({"error": "초안 ID가 없습니다. 초안을 다시 생성해 주세요."}), 400
+    if not isinstance(image_prompt, list) or not image_prompt:
+        return jsonify({"error": "이미지 프롬프트가 없습니다. 초안을 다시 생성해 주세요."}), 400
+    job_id = init_image_job()
+    thread = threading.Thread(
+        target=run_image_generation_job,
+        kwargs={
+            "job_id": job_id,
+            "draft_id": str(draft_id),
+            "image_prompt": image_prompt,
+        },
+        daemon=True,
+    )
+    thread.start()
+    session["current_image_job"] = job_id
+    session["preserve_blog_result"] = True
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/blog/images/status/<job_id>")
+def image_job_status(job_id: str):
+    with IMAGE_JOBS_LOCK:
+        job = IMAGE_JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+        return jsonify(
+            {
+                "status": job["status"],
+                "progress": job["progress"],
+                "logs": job["logs"],
+                "error": job["error"],
+            }
+        )
+
+
+@app.post("/blog/images/finalize/<job_id>")
+def finalize_image_job(job_id: str):
+    with IMAGE_JOBS_LOCK:
+        job = IMAGE_JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+    if job["status"] != "completed" or not job.get("result"):
+        return jsonify({"error": "아직 완료되지 않았습니다."}), 400
+    payload = job["result"]
+    session["last_image_paths"] = payload.get("image_paths", [])
+    session["preserve_blog_result"] = True
+    session["flash_notice"] = "이미지를 생성했습니다."
+    with IMAGE_JOBS_LOCK:
+        IMAGE_JOBS.pop(job_id, None)
+    return jsonify({"ok": True})
+
+
+@app.post("/blog/finalize/<job_id>")
+def finalize_blog_job(job_id: str):
+    with BLOG_JOBS_LOCK:
+        job = BLOG_JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+    if job["status"] != "completed" or not job.get("result"):
+        return jsonify({"error": "아직 완료되지 않았습니다."}), 400
+    payload = job["result"]
+    session["last_blog"] = payload.get("blog_result")
+    session["last_image_prompt"] = payload.get("image_prompt")
+    session["last_image_paths"] = payload.get("image_paths", [])
+    session["current_draft_id"] = payload.get("draft_id")
+    session["preserve_blog_result"] = True
+    session["flash_notice"] = "초안을 생성했습니다."
+    with BLOG_JOBS_LOCK:
+        BLOG_JOBS.pop(job_id, None)
+    return jsonify({"ok": True})
+
+
+def run_blog_generation_job(
+    job_id: str,
+    base_result: dict,
+    hashtags_count: int,
+    site_link: str,
+) -> None:
+    try:
+        append_blog_job_log(job_id, "말씀 구절을 준비합니다.", 5)
+        prompt = build_blog_prompt(
+            base_result,
+            "",
+            "",
+            hashtags_count,
+            site_link,
+            "",
+        )
+        append_blog_job_log(job_id, "본문 생성을 시작합니다.", 15)
+        blog_result = normalize_blog_result(call_openai(prompt))
+        append_blog_job_log(job_id, "본문 생성이 완료되었습니다.", 55)
+
+        draft_id = f"{dt.datetime.now().strftime('%Y%m%d%H%M%S')}_{os.urandom(2).hex()}"
+        theme = base_result.get("theme_display", "") or base_result.get("theme_en", "")
+        verse = base_result.get("verse_reference", "")
+        anchor = base_result.get("anchor_text", "")
+        intent = base_result.get("one_line_intent", "")
+        verse_en = base_result.get("verse_reference_en", "") or verse
+        scripture_ko = base_result.get("korean_verse", "")
+        scripture_en = base_result.get("english_verse", "")
+        scripture_text = scripture_ko or scripture_en
+        base_prompt = (
+            "A classical-style biblical painting depicting the scene described in the scripture.\n\n"
+            f"Scripture (for scene extraction): {scripture_text or verse_en}\n"
+            f"Verse reference: {verse_en}\n"
+            f"Theme: {theme}\n\n"
+            "Scene description:\n"
+            "- Time period: biblical era (Old Testament or 1st century)\n"
+            "- Location: state the place described in the scripture\n"
+            "- Characters: the people described in the scripture, with relationships\n"
+            "- Action: depict the action described in the scripture\n\n"
+            "Composition:\n"
+            "- Perspective: medium-wide, painterly composition\n"
+            "- Focus: the central action described in the scripture\n"
+            "- Background: historically accurate environment of the biblical world\n\n"
+            "Mood & lighting:\n"
+            "- Reverent, solemn, sacred atmosphere\n"
+            "- Soft, natural light emphasizing spiritual significance\n"
+            "- Calm and dignified tone, no exaggerated drama\n\n"
+            "Style:\n"
+            "- classical religious painting\n"
+            "- realistic anatomy and fabric\n"
+            "- oil painting texture\n"
+            "- muted, earthy color palette\n"
+            "- high detail, museum-quality artwork\n\n"
+            "Restrictions:\n"
+            "- no modern elements\n"
+            "- no text or inscriptions\n"
+            "- no stylization, no cartoon\n"
+            "- no fantasy elements"
+        )
+        image_prompt = [
+            {
+                "label": "말씀 구절",
+                "text": base_prompt
+                + "\n\nSection focus:\nA quiet, anchored image that can sit before the verse itself."
+                + "\nScene cues:\nAncient stone room at dawn, clay oil lamp, linen cloth, soft shadows.",
+            },
+            {
+                "label": "본론",
+                "text": base_prompt
+                + "\n\nSection focus:\nA reflective moment that deepens the theme without explaining it."
+                + "\nScene cues:\nHands resting on a stone ledge, distant hills, muted sky.",
+            },
+        ]
+
+        append_blog_job_log(job_id, "이미지는 필요 시 버튼으로 생성합니다.", 70)
+        image_paths: list[str] = []
+
+        append_blog_job_log(job_id, "작성 기록을 저장합니다.", 90)
+        append_blog_log(blog_result, base_result)
+        append_blog_job_log(job_id, "모든 작업이 완료되었습니다.", 100)
+
+        complete_blog_job(
+            job_id,
+            {
+                "blog_result": blog_result,
+                "draft_id": draft_id,
+                "image_prompt": image_prompt,
+                "image_paths": image_paths,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Blog draft generation failed")
+        append_blog_job_log(job_id, f"실패: {exc}")
+        fail_blog_job(job_id, str(exc))
+
+
+def run_image_generation_job(job_id: str, draft_id: str, image_prompt: list[dict]) -> None:
+    try:
+        append_image_job_log(job_id, "이미지 생성 요청을 준비합니다.", 10)
+        prompts = [item.get("text", "") for item in image_prompt if item.get("text")]
+        if not prompts:
+            raise RuntimeError("이미지 프롬프트가 비어 있습니다.")
+        append_image_job_log(job_id, "이미지 생성 요청을 보냈습니다.", 30)
+        images_dir = PROJECT_ROOT / "logs" / "blog-images"
+        image_paths: list[str] = []
+        total = len(prompts)
+        for idx, prompt in enumerate(prompts, start=1):
+            step_progress = 30 + int((idx - 1) / max(total, 1) * 50)
+            append_image_job_log(job_id, f"{idx}/{total} 이미지 생성 중...", step_progress)
+            generated_paths = generate_images(
+                [prompt],
+                images_dir,
+                size="1024x1024",
+                start_index=idx,
+            )
+            image_paths.extend([str(path) for path in generated_paths])
+            append_image_job_log(job_id, f"{idx}/{total} 이미지 완료", 30 + int(idx / total * 50))
+        blog_images = load_blog_images(BLOG_IMAGE_MAP_PATH)
+        blog_images[str(draft_id)] = image_paths
+        save_blog_images(BLOG_IMAGE_MAP_PATH, blog_images)
+        append_image_job_log(job_id, "이미지 생성이 완료되었습니다.", 90)
+        complete_image_job(job_id, {"image_paths": image_paths})
+    except Exception as exc:
+        logger.exception("Image generation failed")
+        append_image_job_log(job_id, f"실패: {exc}")
+        fail_image_job(job_id, str(exc))
+
+
+def run_planner_generation_job(
+    job_id: str,
+    theme: str,
+    size_family: str,
+    size: str,
+    custom_size: str,
+    color_mode: str,
+    extra_prompt: str,
+) -> None:
+    try:
+        themes = read_themes(THEMES_PATH)
+        used = read_used_verses(USED_VERSES_PATH)
+        if theme not in themes:
+            raise RuntimeError("주제를 8가지 중에서 선택해 주세요.")
+        if size_family == "custom" and not custom_size:
+            raise RuntimeError("직접입력 사이즈를 입력해 주세요.")
+        if custom_size:
+            size = custom_size
+        append_planner_job_log(job_id, "말씀을 선택합니다.", 10)
+        chosen_verse = select_new_verse(theme, used)
+        if not chosen_verse:
+            raise RuntimeError("새로운 말씀을 찾지 못했습니다. 다시 시도해 주세요.")
+        append_planner_job_log(job_id, "제작기 문장을 생성합니다.", 40)
+        story_prompt = build_planner_story_prompt(
+            theme,
+            themes,
+            used,
+            chosen_verse,
+            color_mode,
+            extra_prompt,
+        )
+        story_text = call_openai_text(
+            story_prompt,
+            system_prompt="Follow the instructions exactly.",
+        )
+        story_text = story_text.strip()
+        verse_ref = chosen_verse
+        theme_en, theme_ko = parse_theme(theme)
+        result = {
+            "verse_reference": verse_ref,
+            "theme_display": theme,
+            "theme_en": theme_en,
+            "theme_ko": theme_ko,
+        }
+        BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
+        if theme in themes:
+            save_theme_override(THEME_MAP_PATH, verse_ref, theme)
+        theme_slug = slugify(theme_en)
+        verse_slug = slugify(verse_ref.replace(":", "-"))
+        date_tag = dt.date.today().strftime("%Y%m%d")
+        base_name = f"{date_tag}_{theme_slug}_{verse_slug}"
+        brief_path = BRIEFS_DIR / f"{base_name}_story.md"
+        brief_path.write_text(story_text, encoding="utf-8")
+        append_log(result, size, brief_path)
+        append_planner_job_log(job_id, "기획서가 생성되었습니다.", 100)
+        complete_planner_job(job_id, {"result": result, "story": story_text})
+    except Exception as exc:
+        logger.exception("Planner generation failed")
+        append_planner_job_log(job_id, f"실패: {exc}")
+        fail_planner_job(job_id, str(exc))
+
+
+def run_sketch_regeneration_job(job_id: str, variant: int) -> None:
+    try:
+        append_planner_job_log(job_id, "텍스트 스케치를 다시 그립니다.", 30)
+        time.sleep(0.4)
+        append_planner_job_log(job_id, "레이아웃을 정리합니다.", 70)
+        time.sleep(0.3)
+        complete_planner_job(job_id, {"variant": variant})
+    except Exception as exc:
+        logger.exception("Sketch regeneration failed")
+        append_planner_job_log(job_id, f"실패: {exc}")
+        fail_planner_job(job_id, str(exc))
+
+
 @app.route("/blog", methods=["GET", "POST"])
 def blog():
     if request.method == "GET" and not session.pop("preserve_blog_result", False):
@@ -1365,6 +1978,13 @@ def blog():
     if not isinstance(image_paths, list):
         image_paths = []
     selected_brief_label = session.get("selected_brief_label", "")
+    missing_sections = []
+    incomplete_blog = False
+    if blog_result:
+        body_text = str(blog_result.get("body", "")).strip()
+        missing_sections = find_missing_sections(body_text)
+        if missing_sections:
+            incomplete_blog = True
     if request.method == "POST":
         action = request.form.get("action", "").strip()
         if action == "upload_image":
@@ -1418,6 +2038,58 @@ def blog():
             except Exception as exc:
                 logger.exception("Blog image regeneration failed")
                 session["flash_error"] = f"블로그 이미지 재생성 실패: {exc}"
+            return redirect(url_for("blog"))
+        if action == "update_blog_result":
+            if not blog_result:
+                session["flash_error"] = "수정할 초안이 없습니다. 먼저 생성해 주세요."
+                return redirect(url_for("blog"))
+            full_text = request.form.get("blog_body_full", "").strip()
+            updated_title, updated_body, updated_hashtags = parse_blog_full_text(full_text)
+            blog_result["title"] = updated_title
+            blog_result["body"] = updated_body
+            blog_result["hashtags"] = updated_hashtags
+            session["last_blog"] = blog_result
+            session["preserve_blog_result"] = True
+            session["flash_notice"] = "초안을 수정했습니다."
+            return redirect(url_for("blog"))
+        if action == "continue_blog_result":
+            if not blog_result:
+                session["flash_error"] = "추가 생성할 초안이 없습니다. 먼저 생성해 주세요."
+                return redirect(url_for("blog"))
+            full_text = request.form.get("blog_body_full", "").strip()
+            updated_title, updated_body, updated_hashtags = parse_blog_full_text(full_text)
+            if not updated_body:
+                session["flash_error"] = "본문이 비어 있어 추가 생성할 수 없습니다."
+                return redirect(url_for("blog"))
+            missing_sections = find_missing_sections(updated_body)
+            missing_hint = ", ".join(missing_sections) if missing_sections else "없음"
+            prompt = f"""
+너는 신앙 묵상 블로그 글을 이어서 작성하는 편집자다.
+아래 본문 뒤에 이어질 내용만 작성하라. 이미 쓴 문장은 반복하지 않는다.
+제목/해시태그는 절대 작성하지 않는다. 소제목은 단독 줄로 작성한다.
+
+누락된 소제목: {missing_hint}
+
+이미 작성된 본문:
+{updated_body}
+""".strip()
+            try:
+                append_text = call_openai_text(
+                    prompt,
+                    system_prompt="You only return the continuation text.",
+                )
+                append_text = strip_hashtag_line(append_text)
+                if append_text:
+                    updated_body = f"{updated_body}\n\n{append_text}".strip()
+                blog_result["title"] = updated_title
+                blog_result["body"] = updated_body
+                blog_result["hashtags"] = updated_hashtags
+                session["last_blog"] = blog_result
+                session["preserve_blog_result"] = True
+                session["flash_notice"] = "본문을 이어서 생성했습니다."
+            except Exception as exc:
+                logger.exception("Blog continuation failed")
+                session["flash_error"] = f"추가 생성 실패: {exc}"
             return redirect(url_for("blog"))
         if action == "load_used_verse":
             verse_ref = request.form.get("verse_reference", "").strip()
@@ -1594,6 +2266,8 @@ def blog():
         image_prompt=image_prompt,
         image_paths=image_paths,
         blog_history=blog_history,
+        missing_sections=missing_sections,
+        incomplete_blog=incomplete_blog,
     )
 
 

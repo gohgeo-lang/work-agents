@@ -10,6 +10,7 @@ def generate_images(
     output_dir: Path,
     size: str = "1024x1024",
     model: str = "gpt-image-1",
+    start_index: int = 1,
 ) -> list[Path]:
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -20,7 +21,7 @@ def generate_images(
     output_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     timeout_seconds = 180
-    for idx, prompt in enumerate(prompts, start=1):
+    for idx, prompt in enumerate(prompts, start=start_index):
         payload = {
             "model": model,
             "prompt": prompt,

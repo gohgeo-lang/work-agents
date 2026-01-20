@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Blog Draft</title>
+    <title>블로그 자동화</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -26,13 +26,13 @@
       <section class="content blog-left">
         <section class="panel blog-panel">
           <div class="panel-header">
-            <h2>생성옵션설정</h2>
+            <h2>생성옵션</h2>
             <button
               type="submit"
               form="blogGenerateForm"
               class="confirm-button"
             >
-              초안생성하기
+              초안생성
             </button>
           </div>
           <form method="post" class="blog-form" id="blogGenerateForm">
@@ -56,8 +56,8 @@
                   </label>
                 </div>
                 <div class="mode-panel" id="plannerMode">
-                <div class="cta-row inline-select">
-                  <button
+                  <div class="cta-row inline-select">
+                    <button
                       type="button"
                       class="ghost-link"
                       id="openBriefModal"
@@ -126,82 +126,110 @@
                 endif
                 %}
               >
-                글 등록하기
+                네이버에 글 등록하기
               </button>
             </div>
           </form>
         </section>
-
-      </section>
-      <section class="content blog-right">
         <section class="panel result blog-panel">
           <div class="result-header">
-            <h2>결과</h2>
-            <button type="button" class="ghost-link" id="openHistoryPanel">
-              작성기록
-            </button>
+            <h2>초안생성결과</h2>
           </div>
           <div class="result-plain">
             <div class="result-block">
-              <h3>제목</h3>
+              <h3>작성내용</h3>
               <div class="card-content">
-                <p>{{ blog_result.title if blog_result else "" }}</p>
-              </div>
-              <div class="card-skeleton" aria-hidden="true">
-                <span class="skeleton-line"></span>
-                <span class="skeleton-line short"></span>
-              </div>
-            </div>
-            <div class="result-block">
-              <h3>본문</h3>
-              <div class="card-content">
-                <p style="white-space: pre-line">{{ blog_result.body if blog_result else "" }}</p>
-              </div>
-              <div class="card-skeleton" aria-hidden="true">
-                <span class="skeleton-line"></span>
-                <span class="skeleton-line"></span>
-                <span class="skeleton-line"></span>
-              </div>
-            </div>
-            <div class="result-block">
-              <h3>해시태그</h3>
-              <div class="card-content">
-                <p>{{ blog_result.hashtags if blog_result else "" }}</p>
-              </div>
-              <div class="card-skeleton" aria-hidden="true">
-                <span class="skeleton-line"></span>
-              </div>
-            </div>
-            <div class="result-block">
-              <h3>이미지 업로드</h3>
-              <form method="post" enctype="multipart/form-data" id="imageUploadForm">
-                <input type="hidden" name="action" value="upload_image" />
-                <input type="file" name="image_file" accept="image/*" multiple />
-                <p class="meta">최대 2장</p>
-              </form>
-              <form method="post" class="inline-action">
-                <input type="hidden" name="action" value="regenerate_images" />
-                <button
-                  type="submit"
-                  class="ghost-link"
-                  {% if not blog_result %}disabled{% endif %}
+                <textarea name="blog_body_full" rows="18" form="blogEditForm">
+{% if blog_result %}{{ blog_result.title }}
+
+{{ blog_result.body }}
+{% if blog_result.hashtags %}
+
+{{ blog_result.hashtags }}
+{% endif %}{% endif %}</textarea
                 >
-                  {% if image_paths %}이미지만 재생성{% else %}이미지 생성{% endif %}
-                </button>
-              </form>
-              {% if not blog_result %}
-              <p class="meta">초안 생성 후 재생성할 수 있어요.</p>
-              {% elif not image_paths %}
-              <p class="meta">초안이 먼저 생성됩니다. 필요 시 이미지를 생성하세요.</p>
-              {% endif %}
-              {% if image_paths %}
-              <div class="meta">
-                {% for path in image_paths %}
-                <div>등록됨: {{ path }}</div>
-                {% endfor %}
               </div>
-              {% endif %}
+              <div class="card-skeleton" aria-hidden="true">
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line"></span>
+              </div>
             </div>
+          </div>
+          <form
+            method="post"
+            id="blogEditForm"
+            class="inline-action result-actions"
+          >
+            <button
+              type="submit"
+              name="action"
+              value="update_blog_result"
+              class="submit-button"
+              id="saveEditButton"
+              {%
+              if
+              not
+              blog_result
+              %}disabled{%
+              endif
+              %}
+            >
+              저장
+            </button>
+            {% if incomplete_blog %}
+            <button
+              type="submit"
+              name="action"
+              value="continue_blog_result"
+              class="ghost-link"
+            >
+              이어서 생성
+            </button>
+            {% endif %}
+          </form>
+        </section>
+      </section>
+      <section class="content blog-right">
+        <section class="panel blog-panel">
+          <div class="result-header">
+            <h2>이미지 미리보기</h2>
+            <button
+              type="button"
+              class="ghost-link image-action-inline"
+              id="imageGenerateButton"
+              {% if not blog_result %}disabled{% endif %}
+            >
+              {% if image_paths %}이미지만 재생성{% else %}이미지 생성{% endif %}
+            </button>
+          </div>
+          <div class="image-preview">
+            {% if image_paths %} {% for path in image_paths %}
+            <img
+              src="/blog/image?path={{ path }}"
+              alt="생성된 이미지 미리보기"
+            />
+            {% endfor %} {% else %}
+            <p class="meta">이미지가 아직 없습니다.</p>
+            {% endif %}
+          </div>
+          <div class="image-actions">
+            <form
+              method="post"
+              enctype="multipart/form-data"
+              id="imageUploadForm"
+            >
+              <input type="hidden" name="action" value="upload_image" />
+              <input type="file" name="image_file" accept="image/*" multiple />
+              <p class="meta">최대 2장</p>
+            </form>
+            {% if not blog_result %}
+            <p class="meta">초안 생성 후 이미지를 생성할 수 있어요.</p>
+            {% elif not image_paths %}
+            <p class="meta">
+              초안이 먼저 생성됩니다. 필요 시 이미지를 생성하세요.
+            </p>
+            {% endif %}
           </div>
         </section>
       </section>
@@ -226,7 +254,9 @@
             {% for item in blog_history %}
             <div class="result-card">
               <h3>{{ item.title or "제목 없음" }}</h3>
-              <p class="meta">{{ item.date }} · {{ item.theme }} · {{ item.verse_reference }}</p>
+              <p class="meta">
+                {{ item.date }} · {{ item.theme }} · {{ item.verse_reference }}
+              </p>
               <p>{{ item.body_preview }}</p>
               {% if item.hashtags %}
               <p class="meta">{{ item.hashtags }}</p>
@@ -240,6 +270,45 @@
         </div>
       </div>
     </div>
+    <div class="modal" id="progressModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div
+        class="modal-card progress-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="progressModalTitle"
+      >
+        <div class="modal-header">
+          <h3 id="progressModalTitle">초안 생성 진행 상황</h3>
+          <button
+            type="button"
+            class="modal-close"
+            id="closeProgressModal"
+            disabled
+          >
+            닫기
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="progress-track">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="progressStatus">대기 중</span>
+            <span id="progressValue">0%</span>
+          </div>
+          <div class="progress-logs" id="progressLogs"></div>
+        </div>
+      </div>
+    </div>
+    <button
+      type="button"
+      class="history-fab"
+      id="openHistoryPanel"
+      aria-label="작성 기록 열기"
+    >
+      ‹
+    </button>
     <div class="modal" id="briefModal" aria-hidden="true">
       <div class="modal-overlay" data-close="true"></div>
       <div
@@ -254,7 +323,7 @@
             닫기
           </button>
         </div>
-    <div class="modal-body">
+        <div class="modal-body">
           {% if used_entries %}
           <ul class="modal-list">
             {% for entry in used_entries %}
@@ -283,7 +352,14 @@
         </div>
       </div>
     </div>
-    <button type="button" class="scroll-top" id="scrollTopButton" aria-label="상단으로 이동">⌃</button>
+    <button
+      type="button"
+      class="scroll-top"
+      id="scrollTopButton"
+      aria-label="상단으로 이동"
+    >
+      ⌃
+    </button>
   </body>
   <script>
     const openBriefModal = document.getElementById("openBriefModal");
@@ -360,17 +436,278 @@
 
     const blogForm = document.getElementById("blogGenerateForm");
     if (blogForm) {
-      blogForm.addEventListener("submit", () => {
-        const resultPanel = document.querySelector(".panel.result");
-        if (resultPanel) {
-          resultPanel.classList.add("loading");
+      const progressModal = document.getElementById("progressModal");
+      const closeProgressModal = document.getElementById("closeProgressModal");
+      const progressBar = document.getElementById("progressBar");
+      const progressValue = document.getElementById("progressValue");
+      const progressStatus = document.getElementById("progressStatus");
+      const progressLogs = document.getElementById("progressLogs");
+      let pollTimer = null;
+
+      const setProgress = (value, status) => {
+        const safeValue = Math.max(0, Math.min(100, value || 0));
+        if (progressBar) {
+          progressBar.style.width = `${safeValue}%`;
         }
+        if (progressValue) {
+          progressValue.textContent = `${safeValue}%`;
+        }
+        if (progressStatus && status) {
+          progressStatus.textContent = status;
+        }
+      };
+
+      const openProgressModal = () => {
+        if (!progressModal) return;
+        progressModal.classList.add("open");
+        progressModal.setAttribute("aria-hidden", "false");
+        if (closeProgressModal) {
+          closeProgressModal.disabled = true;
+        }
+      };
+
+      const closeProgress = () => {
+        if (!progressModal) return;
+        progressModal.classList.remove("open");
+        progressModal.setAttribute("aria-hidden", "true");
+        if (closeProgressModal) {
+          closeProgressModal.disabled = false;
+        }
+      };
+
+      const renderLogs = (logs) => {
+        if (!progressLogs) return;
+        progressLogs.innerHTML = "";
+        (logs || []).forEach((line) => {
+          const row = document.createElement("div");
+          row.className = "progress-log";
+          row.textContent = line;
+          progressLogs.appendChild(row);
+        });
+        progressLogs.scrollTop = progressLogs.scrollHeight;
+      };
+
+      const pollStatus = (jobId) => {
+        if (!jobId) return;
+        fetch(`/blog/status/${jobId}`)
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data.error) {
+              setProgress(0, data.error);
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            const status = data.status || "running";
+            const progress = data.progress || 0;
+            setProgress(progress, status === "running" ? "진행 중" : status);
+            renderLogs(data.logs || []);
+            if (status === "completed") {
+              if (pollTimer) {
+                clearTimeout(pollTimer);
+                pollTimer = null;
+              }
+              fetch(`/blog/finalize/${jobId}`, { method: "POST" })
+                .then(() => {
+                  closeProgress();
+                  window.location.href = "/blog";
+                })
+                .catch(() => {
+                  if (closeProgressModal) {
+                    closeProgressModal.disabled = false;
+                  }
+                });
+              return;
+            }
+            if (status === "failed") {
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            pollTimer = setTimeout(() => pollStatus(jobId), 1200);
+          })
+          .catch(() => {
+            if (closeProgressModal) {
+              closeProgressModal.disabled = false;
+            }
+          });
+      };
+
+      blogForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        openProgressModal();
+        setProgress(5, "작업 시작");
+        if (progressLogs) {
+          progressLogs.innerHTML = "";
+        }
+        const formData = new FormData(blogForm);
+        fetch("/blog/start", {
+          method: "POST",
+          body: formData,
+          headers: { "X-Requested-With": "fetch" },
+        })
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data.error) {
+              setProgress(0, data.error);
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            pollStatus(data.job_id);
+          })
+          .catch(() => {
+            setProgress(0, "요청을 시작하지 못했습니다.");
+            if (closeProgressModal) {
+              closeProgressModal.disabled = false;
+            }
+          });
+      });
+
+      if (closeProgressModal) {
+        closeProgressModal.addEventListener("click", closeProgress);
+      }
+    }
+
+    const imageGenerateButton = document.getElementById("imageGenerateButton");
+    if (imageGenerateButton) {
+      const progressModal = document.getElementById("progressModal");
+      const closeProgressModal = document.getElementById("closeProgressModal");
+      const progressBar = document.getElementById("progressBar");
+      const progressValue = document.getElementById("progressValue");
+      const progressStatus = document.getElementById("progressStatus");
+      const progressLogs = document.getElementById("progressLogs");
+      let pollTimer = null;
+
+      const setProgress = (value, status) => {
+        const safeValue = Math.max(0, Math.min(100, value || 0));
+        if (progressBar) {
+          progressBar.style.width = `${safeValue}%`;
+        }
+        if (progressValue) {
+          progressValue.textContent = `${safeValue}%`;
+        }
+        if (progressStatus && status) {
+          progressStatus.textContent = status;
+        }
+      };
+
+      const openProgressModal = () => {
+        if (!progressModal) return;
+        progressModal.classList.add("open");
+        progressModal.setAttribute("aria-hidden", "false");
+        if (closeProgressModal) {
+          closeProgressModal.disabled = true;
+        }
+      };
+
+      const closeProgress = () => {
+        if (!progressModal) return;
+        progressModal.classList.remove("open");
+        progressModal.setAttribute("aria-hidden", "true");
+        if (closeProgressModal) {
+          closeProgressModal.disabled = false;
+        }
+      };
+
+      const renderLogs = (logs) => {
+        if (!progressLogs) return;
+        progressLogs.innerHTML = "";
+        (logs || []).forEach((line) => {
+          const row = document.createElement("div");
+          row.className = "progress-log";
+          row.textContent = line;
+          progressLogs.appendChild(row);
+        });
+        progressLogs.scrollTop = progressLogs.scrollHeight;
+      };
+
+      const pollStatus = (jobId) => {
+        if (!jobId) return;
+        fetch(`/blog/images/status/${jobId}`)
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data.error) {
+              setProgress(0, data.error);
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            const status = data.status || "running";
+            const progress = data.progress || 0;
+            setProgress(progress, status === "running" ? "이미지 생성 중" : status);
+            renderLogs(data.logs || []);
+            if (status === "completed") {
+              if (pollTimer) {
+                clearTimeout(pollTimer);
+                pollTimer = null;
+              }
+              fetch(`/blog/images/finalize/${jobId}`, { method: "POST" })
+                .then(() => {
+                  closeProgress();
+                  window.location.href = "/blog";
+                })
+                .catch(() => {
+                  if (closeProgressModal) {
+                    closeProgressModal.disabled = false;
+                  }
+                });
+              return;
+            }
+            if (status === "failed") {
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            pollTimer = setTimeout(() => pollStatus(jobId), 1200);
+          })
+          .catch(() => {
+            if (closeProgressModal) {
+              closeProgressModal.disabled = false;
+            }
+          });
+      };
+
+      imageGenerateButton.addEventListener("click", () => {
+        openProgressModal();
+        setProgress(5, "이미지 준비");
+        if (progressLogs) {
+          progressLogs.innerHTML = "";
+        }
+        fetch("/blog/images/start", {
+          method: "POST",
+          headers: { "X-Requested-With": "fetch" },
+        })
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data.error) {
+              setProgress(0, data.error);
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              return;
+            }
+            pollStatus(data.job_id);
+          })
+          .catch(() => {
+            setProgress(0, "이미지 요청을 시작하지 못했습니다.");
+            if (closeProgressModal) {
+              closeProgressModal.disabled = false;
+            }
+          });
       });
     }
 
     const imageUploadForm = document.getElementById("imageUploadForm");
     if (imageUploadForm) {
-      const imageInput = imageUploadForm.querySelector("input[name='image_file']");
+      const imageInput = imageUploadForm.querySelector(
+        "input[name='image_file']",
+      );
       if (imageInput) {
         imageInput.addEventListener("change", () => {
           if (imageInput.files && imageInput.files.length) {
@@ -407,13 +744,13 @@
     }
 
     const modeInputs = document.querySelectorAll(
-      "input[name='generation_mode']"
+      "input[name='generation_mode']",
     );
     const plannerMode = document.getElementById("plannerMode");
     const uploadMode = document.getElementById("uploadMode");
     const updateMode = () => {
       const selected = document.querySelector(
-        "input[name='generation_mode']:checked"
+        "input[name='generation_mode']:checked",
       );
       const isPlanner = selected && selected.value === "planner";
       if (plannerMode && uploadMode) {
@@ -428,5 +765,30 @@
       input.addEventListener("change", updateMode);
     });
     updateMode();
+
+    const autoGrow = (el) => {
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    const blogBodyFull = document.querySelector(
+      "textarea[name='blog_body_full']",
+    );
+    if (blogBodyFull) {
+      autoGrow(blogBodyFull);
+      blogBodyFull.addEventListener("input", () => autoGrow(blogBodyFull));
+      window.addEventListener("resize", () => autoGrow(blogBodyFull));
+    }
+
+    const saveEditButton = document.getElementById("saveEditButton");
+    if (blogBodyFull && saveEditButton) {
+      let initialValue = blogBodyFull.value;
+      const syncSaveState = () => {
+        const changed = blogBodyFull.value !== initialValue;
+        saveEditButton.disabled = !changed;
+      };
+      blogBodyFull.addEventListener("input", syncSaveState);
+      syncSaveState();
+    }
   </script>
 </html>
