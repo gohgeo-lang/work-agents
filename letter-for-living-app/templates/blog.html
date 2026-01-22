@@ -299,6 +299,18 @@
             <span id="progressValue">0%</span>
           </div>
           <div class="progress-logs" id="progressLogs"></div>
+          <div class="image-retry-controls" id="imageRetryControls" hidden>
+            <button type="button" class="submit-button" id="imageRetryButton">
+              재생성
+            </button>
+            <div class="image-prompt-editor" id="imagePromptEditorWrap" hidden>
+              <label for="imagePromptEditor">문제된 프롬프트</label>
+              <textarea id="imagePromptEditor" rows="6"></textarea>
+              <button type="button" class="submit-button" id="imagePromptRetryButton">
+                수정 후 재생성
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -443,6 +455,7 @@
       const progressValue = document.getElementById("progressValue");
       const progressStatus = document.getElementById("progressStatus");
       const progressLogs = document.getElementById("progressLogs");
+      const imageRetryControls = document.getElementById("imageRetryControls");
       let pollTimer = null;
 
       const setProgress = (value, status) => {
@@ -464,6 +477,9 @@
         progressModal.setAttribute("aria-hidden", "false");
         if (closeProgressModal) {
           closeProgressModal.disabled = true;
+        }
+        if (imageRetryControls) {
+          imageRetryControls.hidden = true;
         }
       };
 
@@ -581,7 +597,15 @@
       const progressValue = document.getElementById("progressValue");
       const progressStatus = document.getElementById("progressStatus");
       const progressLogs = document.getElementById("progressLogs");
+      const progressTitle = document.getElementById("progressModalTitle");
+      const imageRetryControls = document.getElementById("imageRetryControls");
+      const imageRetryButton = document.getElementById("imageRetryButton");
+      const imagePromptEditorWrap = document.getElementById("imagePromptEditorWrap");
+      const imagePromptEditor = document.getElementById("imagePromptEditor");
+      const imagePromptRetryButton = document.getElementById("imagePromptRetryButton");
+      const defaultImagePrompt = {{ (image_prompt[0].text if image_prompt and image_prompt[0] and image_prompt[0].text else "") | tojson }};
       let pollTimer = null;
+      let retryCount = 0;
 
       const setProgress = (value, status) => {
         const safeValue = Math.max(0, Math.min(100, value || 0));
@@ -602,6 +626,15 @@
         progressModal.setAttribute("aria-hidden", "false");
         if (closeProgressModal) {
           closeProgressModal.disabled = true;
+        }
+        if (progressTitle) {
+          progressTitle.textContent = "이미지 생성 진행 상황";
+        }
+        if (imageRetryControls) {
+          imageRetryControls.hidden = true;
+        }
+        if (imagePromptEditorWrap) {
+          imagePromptEditorWrap.hidden = true;
         }
       };
 
@@ -663,6 +696,20 @@
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
+              if (imageRetryControls) {
+                imageRetryControls.hidden = false;
+              }
+              const errorText = String(data.error || "");
+              const isPolicyError =
+                errorText.includes("moderation_blocked") ||
+                errorText.includes("safety_violations") ||
+                errorText.includes("safety system");
+              if (retryCount >= 1 && isPolicyError && imagePromptEditorWrap) {
+                imagePromptEditorWrap.hidden = false;
+                if (imagePromptEditor && !imagePromptEditor.value) {
+                  imagePromptEditor.value = defaultImagePrompt;
+                }
+              }
               return;
             }
             pollTimer = setTimeout(() => pollStatus(jobId), 1200);
@@ -675,6 +722,7 @@
       };
 
       imageGenerateButton.addEventListener("click", () => {
+        retryCount = 0;
         openProgressModal();
         setProgress(5, "이미지 준비");
         if (progressLogs) {
@@ -691,6 +739,9 @@
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
+              if (imageRetryControls) {
+                imageRetryControls.hidden = false;
+              }
               return;
             }
             pollStatus(data.job_id);
@@ -700,8 +751,65 @@
             if (closeProgressModal) {
               closeProgressModal.disabled = false;
             }
+            if (imageRetryControls) {
+              imageRetryControls.hidden = false;
+            }
           });
       });
+
+      const startImageJob = (payload) => {
+        openProgressModal();
+        setProgress(5, "이미지 준비");
+        if (progressLogs) {
+          progressLogs.innerHTML = "";
+        }
+        fetch("/blog/images/start", {
+          method: "POST",
+          headers: {
+            "X-Requested-With": "fetch",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload || {}),
+        })
+          .then((resp) => resp.json())
+          .then((data) => {
+            if (data.error) {
+              setProgress(0, data.error);
+              if (closeProgressModal) {
+                closeProgressModal.disabled = false;
+              }
+              if (imageRetryControls) {
+                imageRetryControls.hidden = false;
+              }
+              return;
+            }
+            pollStatus(data.job_id);
+          })
+          .catch(() => {
+            setProgress(0, "이미지 요청을 시작하지 못했습니다.");
+            if (closeProgressModal) {
+              closeProgressModal.disabled = false;
+            }
+            if (imageRetryControls) {
+              imageRetryControls.hidden = false;
+            }
+          });
+      };
+
+      if (imageRetryButton) {
+        imageRetryButton.addEventListener("click", () => {
+          retryCount += 1;
+          startImageJob({});
+        });
+      }
+
+      if (imagePromptRetryButton) {
+        imagePromptRetryButton.addEventListener("click", () => {
+          retryCount += 1;
+          const promptText = imagePromptEditor ? imagePromptEditor.value.trim() : "";
+          startImageJob({ prompt: promptText });
+        });
+      }
     }
 
     const imageUploadForm = document.getElementById("imageUploadForm");

@@ -1516,6 +1516,25 @@ button:disabled {
   font-size: 13px;
 }
 
+.image-retry-controls {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.image-retry-controls .submit-button {
+  align-self: start;
+}
+
+.image-prompt-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.image-prompt-editor textarea {
+  resize: vertical;
+}
+
 .progress-log + .progress-log {
   margin-top: 6px;
 }

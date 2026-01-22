@@ -2106,12 +2106,19 @@ def blog_job_status(job_id: str):
 @app.post("/blog/images/start")
 def start_image_job():
     draft_id = session.get("current_draft_id")
+    override_prompt = None
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        override_prompt = str(payload.get("prompt", "")).strip()
     image_prompt = session.get("last_image_prompt")
     blog_result = session.get("last_blog")
     if not blog_result:
         return jsonify({"error": "먼저 초안을 생성해 주세요."}), 400
     if not draft_id:
         return jsonify({"error": "초안 ID가 없습니다. 초안을 다시 생성해 주세요."}), 400
+    if override_prompt:
+        image_prompt = [{"label": "수정 프롬프트", "text": override_prompt}]
+        session["last_image_prompt"] = image_prompt
     if not isinstance(image_prompt, list) or not image_prompt:
         return jsonify({"error": "이미지 프롬프트가 없습니다. 초안을 다시 생성해 주세요."}), 400
     job_id = init_image_job()
@@ -2238,6 +2245,7 @@ def run_blog_generation_job(
             "- high detail, museum-quality artwork\n\n"
             "Restrictions:\n"
             "- no modern elements\n"
+            "- no nudity or exposed bodies\n"
             "- no text or inscriptions\n"
             "- no stylization, no cartoon\n"
             "- no fantasy elements"
@@ -2666,6 +2674,7 @@ def blog():
                         "- high detail, museum-quality artwork\n\n"
                         "Restrictions:\n"
                         "- no modern elements\n"
+                        "- no nudity or exposed bodies\n"
                         "- no text or inscriptions\n"
                         "- no stylization, no cartoon\n"
                         "- no fantasy elements"

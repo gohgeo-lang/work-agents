@@ -385,6 +385,11 @@ def open_naver_writer(
         for para in paragraphs:
             heading_pattern = r"#+\s*(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*"
             para = re.sub(heading_pattern, r"\n\1\n", para)
+            para = re.sub(
+                r"([.!?])\s*(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*$",
+                r"\1\n\2\n",
+                para,
+            )
             lines = [line.strip() for line in para.splitlines() if line.strip()]
             if not lines:
                 continue
@@ -440,10 +445,16 @@ def open_naver_writer(
         if not match:
             return text, ""
         hashtags = match.group(1).strip()
-        if "http" in hashtags:
-            return text, ""
         cleaned = text[: match.start(1)].rstrip()
         return cleaned, hashtags
+
+    def split_trailing_link(text: str) -> tuple[str, str]:
+        match = re.search(r"(https?://\S+)\s*$", text)
+        if not match:
+            return text, ""
+        link = match.group(1).strip()
+        cleaned = text[: match.start(1)].rstrip()
+        return cleaned, link
 
     def normalize_qa_text(text: str) -> str:
         cleaned = text.replace("\r\n", "\n").strip()
@@ -792,6 +803,21 @@ def open_naver_writer(
                     closing_paragraph = last
                     paragraphs = paragraphs[:-1]
 
+        trailing_link = ""
+        if paragraphs:
+            cleaned_link, extracted_link = split_trailing_link(paragraphs[-1])
+            if extracted_link:
+                trailing_link = extracted_link
+                if cleaned_link:
+                    paragraphs[-1] = cleaned_link
+                else:
+                    paragraphs = paragraphs[:-1]
+        if not trailing_link and closing_paragraph:
+            cleaned_link, extracted_link = split_trailing_link(closing_paragraph)
+            if extracted_link:
+                trailing_link = extracted_link
+                closing_paragraph = cleaned_link
+
         if not hashtags_line and paragraphs:
             cleaned, extracted = split_hashtags(paragraphs[-1])
             if extracted:
@@ -890,6 +916,9 @@ def open_naver_writer(
                 else:
                     if current_section == "요약":
                         para = normalize_bullets(para)
+                    select_text_format(
+                        "본문", "button.se-toolbar-option-text-format-body-button"
+                    )
                     set_element_text(body_el, para)
                 content_idx += 1
             if current_section == "배경" and bg_image and not bg_image_inserted:
@@ -912,6 +941,13 @@ def open_naver_writer(
                     pass
                 click_align_button("center")
                 set_element_text(body_el, closing_paragraph)
+            if trailing_link:
+                try:
+                    body_el.send_keys("\n\n")
+                except Exception:
+                    pass
+                click_align_button("center")
+                set_element_text(body_el, trailing_link)
             if hashtags_line:
                 try:
                     body_el.send_keys("\n\n")
