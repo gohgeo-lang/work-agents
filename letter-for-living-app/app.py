@@ -7,9 +7,11 @@ import threading
 import logging
 import time
 import uuid
+import calendar
 from pathlib import Path
 
 import requests
+from korean_lunar_calendar import KoreanLunarCalendar
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for, send_file
 
 from agents.blog_writer import build_blog_prompt
@@ -54,6 +56,45 @@ IMAGE_DIR = PROJECT_ROOT / "logs" / "generated-images"
 BLOG_LOG_PATH = PROJECT_ROOT / "logs" / "blog-log.csv"
 BLOG_IMAGE_MAP_PATH = PROJECT_ROOT / "logs" / "blog-images.json"
 APP_LOG_PATH = PROJECT_ROOT / "logs" / "app.log"
+TASKS_PATH = PROJECT_ROOT / "logs" / "tasks.json"
+QUICK_LINKS_PATH = PROJECT_ROOT / "logs" / "quick-links.json"
+
+FIXED_HOLIDAYS: dict[tuple[int, int], list[str]] = {
+    (1, 1): ["신정"],
+    (3, 1): ["삼일절"],
+    (5, 5): ["어린이날"],
+    (6, 6): ["현충일"],
+    (8, 15): ["광복절"],
+    (10, 3): ["개천절"],
+    (10, 9): ["한글날"],
+    (12, 25): ["성탄절"],
+    (2, 14): ["발렌타인데이"],
+    (3, 14): ["화이트데이"],
+    (5, 8): ["어버이날"],
+    (5, 15): ["스승의날"],
+    (7, 17): ["제헌절"],
+}
+
+LUNAR_HOLIDAYS: list[tuple[int, int, str]] = [
+    (1, 1, "설날"),
+    (4, 8, "석가탄신일"),
+    (8, 15, "추석"),
+]
+
+
+def build_lunar_holidays(year: int) -> dict[str, list[str]]:
+    calendar = KoreanLunarCalendar()
+    holiday_map: dict[str, list[str]] = {}
+    for month, day, label in LUNAR_HOLIDAYS:
+        calendar.setLunarDate(year, month, day, False)
+        solar_iso = calendar.SolarIsoFormat()
+        holiday_map.setdefault(solar_iso, []).append(label)
+        if label in ("설날", "추석"):
+            solar_date = dt.date.fromisoformat(solar_iso)
+            for offset, suffix in [(-1, "연휴"), (1, "연휴")]:
+                shifted = (solar_date + dt.timedelta(days=offset)).isoformat()
+                holiday_map.setdefault(shifted, []).append(f"{label} {suffix}")
+    return holiday_map
 
 logger = logging.getLogger("lfl")
 if not logger.handlers:
@@ -225,6 +266,71 @@ def load_settings(path: Path) -> dict:
 def save_settings(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_tasks(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            normalized = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                item.setdefault("category", "today")
+                item.setdefault("done", False)
+                item.setdefault("created_at", dt.datetime.now().isoformat())
+                item.setdefault("repeat", False)
+                item.setdefault("repeat_interval", "daily")
+                item.setdefault("repeat_start_date", "")
+                item.setdefault("last_done_date", "")
+                item.setdefault("start_date", "")
+                item.setdefault("end_date", "")
+                item.setdefault("time", "")
+                item.setdefault("title", "")
+                normalized.append(item)
+            return normalized
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def save_tasks(path: Path, tasks: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_quick_links(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            normalized = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "")).strip()
+                url = str(item.get("url", "")).strip()
+                if not url:
+                    continue
+                normalized.append(
+                    {
+                        "id": item.get("id") or uuid.uuid4().hex,
+                        "title": title or url,
+                        "url": url,
+                    }
+                )
+            return normalized
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def save_quick_links(path: Path, links: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(links, ensure_ascii=False, indent=2), encoding="utf-8")
     
 
 def read_used_verses(path: Path) -> set[str]:
@@ -1569,6 +1675,343 @@ def home():
     return render_template("home.html")
 
 
+def parse_task_items(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def build_task_items(items_text: str, existing: list[dict] | None = None) -> list[dict]:
+    parsed = parse_task_items(items_text)
+    if not parsed:
+        return []
+    existing = existing or []
+    existing_done = {}
+    for item in existing:
+        key = str(item.get("text", "")).strip()
+        if key and key not in existing_done:
+            existing_done[key] = bool(item.get("done"))
+    items: list[dict] = []
+    for text in parsed:
+        items.append(
+            {
+                "id": uuid.uuid4().hex,
+                "text": text,
+                "done": existing_done.get(text, False),
+            }
+        )
+    return items
+
+
+def task_effective_date(task: dict, fallback: dt.date) -> dt.date:
+    start_raw = str(task.get("start_date", "")).strip()
+    created_raw = str(task.get("created_at", "")).strip()
+    try:
+        if start_raw:
+            return dt.date.fromisoformat(start_raw)
+    except ValueError:
+        pass
+    try:
+        if created_raw:
+            return dt.datetime.fromisoformat(created_raw).date()
+    except ValueError:
+        pass
+    return fallback
+
+
+@app.route("/tasks", methods=["GET", "POST"])
+def tasks():
+    tasks_list = load_tasks(TASKS_PATH)
+    quick_links = load_quick_links(QUICK_LINKS_PATH)
+    error = None
+    notice = None
+    today = dt.date.today()
+    today_iso = today.isoformat()
+    reset_repeat = False
+    for task in tasks_list:
+        if not task.get("repeat"):
+            continue
+        if task.get("last_done_date") != today_iso:
+            if task.get("done"):
+                task["done"] = False
+                reset_repeat = True
+            if task.get("items"):
+                for item in task["items"]:
+                    if item.get("done"):
+                        item["done"] = False
+                        reset_repeat = True
+    if reset_repeat:
+        save_tasks(TASKS_PATH, tasks_list)
+    query_year = request.args.get("year", "").strip()
+    query_month = request.args.get("month", "").strip()
+    try:
+        year = int(query_year) if query_year else today.year
+    except ValueError:
+        year = today.year
+    try:
+        month = int(query_month) if query_month else today.month
+    except ValueError:
+        month = today.month
+    if month < 1 or month > 12:
+        month = today.month
+        year = today.year
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        if action == "add_quick_link":
+            title = request.form.get("quick_title", "").strip()
+            url = request.form.get("quick_url", "").strip()
+            if not url:
+                error = "링크 주소를 입력해 주세요."
+            else:
+                quick_links.append(
+                    {
+                        "id": uuid.uuid4().hex,
+                        "title": title or url,
+                        "url": url,
+                    }
+                )
+                save_quick_links(QUICK_LINKS_PATH, quick_links)
+                notice = "바로가기를 추가했습니다."
+        elif action == "delete_quick_link":
+            link_id = request.form.get("link_id", "").strip()
+            quick_links = [link for link in quick_links if link.get("id") != link_id]
+            save_quick_links(QUICK_LINKS_PATH, quick_links)
+            notice = "바로가기를 삭제했습니다."
+        elif action == "reorder_quick_links":
+            order_raw = request.form.get("order", "").strip()
+            order_ids = [item for item in order_raw.split(",") if item]
+            if order_ids:
+                link_map = {link.get("id"): link for link in quick_links}
+                reordered = [link_map.get(link_id) for link_id in order_ids]
+                reordered = [link for link in reordered if link]
+                remaining = [link for link in quick_links if link.get("id") not in order_ids]
+                quick_links = reordered + remaining
+                save_quick_links(QUICK_LINKS_PATH, quick_links)
+        elif action == "add_task":
+            text = request.form.get("task_text", "").strip()
+            title = request.form.get("task_title", "").strip()
+            items_text = text
+            repeat_flag = request.form.get("repeat", "no").strip().lower() == "yes"
+            repeat_interval = request.form.get("repeat_interval", "daily").strip()
+            repeat_start_date = request.form.get("repeat_start_date", "").strip()
+            category = "fixed" if repeat_flag else "today"
+            start_date = request.form.get("start_date", "").strip()
+            end_date = request.form.get("end_date", "").strip()
+            time_start = request.form.get("time_start", "").strip()
+            time_end = request.form.get("time_end", "").strip()
+            time_value = " ~ ".join(part for part in [time_start, time_end] if part)
+            if not title and not text:
+                error = "일정명을 입력해 주세요."
+            else:
+                if repeat_flag and not repeat_start_date:
+                    repeat_start_date = start_date
+                if not title:
+                    title = text
+                items = build_task_items(items_text)
+                tasks_list.append(
+                    {
+                        "id": uuid.uuid4().hex,
+                        "title": title,
+                        "text": "" if items else text,
+                        "items": items,
+                        "done": False,
+                        "category": category,
+                        "repeat": repeat_flag,
+                        "repeat_interval": repeat_interval,
+                        "repeat_start_date": repeat_start_date,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "time": time_value,
+                        "created_at": dt.datetime.now().isoformat(),
+                    }
+                )
+                save_tasks(TASKS_PATH, tasks_list)
+                notice = "할 일을 추가했습니다."
+        elif action == "toggle_task":
+            task_id = request.form.get("task_id", "").strip()
+            for task in tasks_list:
+                if task.get("id") == task_id:
+                    task["done"] = not bool(task.get("done"))
+                    if task.get("done"):
+                        task["last_done_date"] = today_iso
+                    else:
+                        task["last_done_date"] = ""
+                    break
+            save_tasks(TASKS_PATH, tasks_list)
+        elif action == "toggle_subtask":
+            task_id = request.form.get("task_id", "").strip()
+            item_id = request.form.get("item_id", "").strip()
+            for task in tasks_list:
+                if task.get("id") == task_id:
+                    for item in task.get("items", []):
+                        if item.get("id") == item_id:
+                            item["done"] = not bool(item.get("done"))
+                            break
+                    items = task.get("items", [])
+                    if items:
+                        task["done"] = all(bool(item.get("done")) for item in items)
+                        if task["done"]:
+                            task["last_done_date"] = today_iso
+                        else:
+                            task["last_done_date"] = ""
+                    break
+            save_tasks(TASKS_PATH, tasks_list)
+        elif action == "delete_task":
+            task_id = request.form.get("task_id", "").strip()
+            tasks_list = [task for task in tasks_list if task.get("id") != task_id]
+            save_tasks(TASKS_PATH, tasks_list)
+            notice = "할 일을 삭제했습니다."
+        elif action == "update_task":
+            task_id = request.form.get("task_id", "").strip()
+            title = request.form.get("task_title", "").strip()
+            text = request.form.get("task_text", "").strip()
+            items_text = text
+            repeat_flag = request.form.get("repeat", "no").strip().lower() == "yes"
+            repeat_interval = request.form.get("repeat_interval", "daily").strip()
+            repeat_start_date = request.form.get("repeat_start_date", "").strip()
+            category = "fixed" if repeat_flag else "today"
+            start_date = request.form.get("start_date", "").strip()
+            end_date = request.form.get("end_date", "").strip()
+            time_start = request.form.get("time_start", "").strip()
+            time_end = request.form.get("time_end", "").strip()
+            time_value = " ~ ".join(part for part in [time_start, time_end] if part)
+            if not title and not text:
+                error = "일정명을 입력해 주세요."
+            else:
+                for task in tasks_list:
+                    if task.get("id") == task_id:
+                        items = build_task_items(items_text, task.get("items", []))
+                        task["title"] = title or text
+                        task["text"] = "" if items else text
+                        task["items"] = items
+                        task["repeat"] = repeat_flag
+                        task["repeat_interval"] = repeat_interval
+                        task["repeat_start_date"] = repeat_start_date or start_date
+                        task["category"] = category
+                        task["start_date"] = start_date
+                        task["end_date"] = end_date
+                        task["time"] = time_value
+                        break
+                save_tasks(TASKS_PATH, tasks_list)
+                notice = "일정을 수정했습니다."
+    fixed_tasks = [task for task in tasks_list if task.get("category") == "fixed"]
+    today_tasks = [task for task in tasks_list if task.get("category") != "fixed"]
+    display_tasks = []
+    for task in tasks_list:
+        if task.get("repeat"):
+            display_tasks.append(task)
+            continue
+        task_date = task_effective_date(task, today)
+        if task_date == today:
+            display_tasks.append(task)
+    display_tasks = sorted(display_tasks, key=lambda task: task.get("created_at", ""))
+    cal = calendar.Calendar(firstweekday=6)
+    weeks = cal.monthdatescalendar(year, month)
+    prev_month = month - 1
+    prev_year = year
+    next_month = month + 1
+    next_year = year
+    if prev_month < 1:
+        prev_month = 12
+        prev_year -= 1
+    if next_month > 12:
+        next_month = 1
+        next_year += 1
+    holiday_map: dict[str, list[str]] = {}
+    lunar_holidays = build_lunar_holidays(year)
+    for week in weeks:
+        for day in week:
+            labels = []
+            labels.extend(FIXED_HOLIDAYS.get((day.month, day.day), []))
+            labels.extend(lunar_holidays.get(day.isoformat(), []))
+            if labels:
+                holiday_map[day.isoformat()] = labels
+    daily_tasks: dict[dt.date, list[dict]] = {}
+    for task in tasks_list:
+        start_raw = str(task.get("start_date", "")).strip()
+        end_raw = str(task.get("end_date", "")).strip()
+        repeat_start_raw = str(task.get("repeat_start_date", "")).strip()
+        interval = str(task.get("repeat_interval", "daily")).strip()
+        created_raw = str(task.get("created_at", "")).strip()
+        try:
+            start_date = dt.date.fromisoformat(start_raw) if start_raw else None
+        except ValueError:
+            start_date = None
+        try:
+            end_date = dt.date.fromisoformat(end_raw) if end_raw else None
+        except ValueError:
+            end_date = None
+        try:
+            repeat_start_date = (
+                dt.date.fromisoformat(repeat_start_raw) if repeat_start_raw else None
+            )
+        except ValueError:
+            repeat_start_date = None
+        if not start_date:
+            try:
+                start_date = dt.datetime.fromisoformat(created_raw).date()
+            except ValueError:
+                start_date = today
+        if task.get("repeat"):
+            range_start = repeat_start_date or start_date or today
+            if end_date:
+                range_end = end_date
+            else:
+                last_day = calendar.monthrange(year, month)[1]
+                range_end = dt.date(year, month, last_day)
+            if range_end < range_start:
+                range_end = range_start
+            step = 1
+            if interval == "alternate":
+                step = 2
+            elif interval == "weekly":
+                step = 7
+            current = range_start
+            while current <= range_end:
+                daily_tasks.setdefault(current, []).append(task)
+                current += dt.timedelta(days=step)
+        else:
+            daily_tasks.setdefault(start_date or today, []).append(task)
+    calendar_data: dict[str, dict[str, Any]] = {}
+    for week in weeks:
+        for day in week:
+            tasks_for_day = []
+            for task in daily_tasks.get(day, []):
+                tasks_for_day.append(
+                    {
+                        "title": task.get("title") or task.get("text") or "제목 없음",
+                        "time": task.get("time", ""),
+                        "repeat_interval": task.get("repeat_interval", ""),
+                        "repeat_start_date": task.get("repeat_start_date", ""),
+                        "text": task.get("text", ""),
+                        "items": [item.get("text") for item in task.get("items", [])],
+                    }
+                )
+            calendar_data[day.isoformat()] = {
+                "holidays": holiday_map.get(day.isoformat(), []),
+                "tasks": tasks_for_day,
+            }
+    return render_template(
+        "tasks.html",
+        display_tasks=display_tasks,
+        error=error,
+        notice=notice,
+        weeks=weeks,
+        month=month,
+        year=year,
+        prev_month=prev_month,
+        prev_year=prev_year,
+        next_month=next_month,
+        next_year=next_year,
+        today=today,
+        fixed_count=len(fixed_tasks),
+        daily_tasks=daily_tasks,
+        holiday_map=holiday_map,
+        quick_links=quick_links,
+        calendar_data=calendar_data,
+    )
+
+
+
+
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     notice = None
@@ -1805,13 +2248,7 @@ def run_blog_generation_job(
                 "text": base_prompt
                 + "\n\nSection focus:\nA quiet, anchored image that can sit before the verse itself."
                 + "\nScene cues:\nAncient stone room at dawn, clay oil lamp, linen cloth, soft shadows.",
-            },
-            {
-                "label": "본론",
-                "text": base_prompt
-                + "\n\nSection focus:\nA reflective moment that deepens the theme without explaining it."
-                + "\nScene cues:\nHands resting on a stone ledge, distant hills, muted sky.",
-            },
+            }
         ]
 
         append_blog_job_log(job_id, "이미지는 필요 시 버튼으로 생성합니다.", 70)
@@ -1839,7 +2276,7 @@ def run_blog_generation_job(
 def run_image_generation_job(job_id: str, draft_id: str, image_prompt: list[dict]) -> None:
     try:
         append_image_job_log(job_id, "이미지 생성 요청을 준비합니다.", 10)
-        prompts = [item.get("text", "") for item in image_prompt if item.get("text")]
+        prompts = [item.get("text", "") for item in image_prompt if item.get("text")][:1]
         if not prompts:
             raise RuntimeError("이미지 프롬프트가 비어 있습니다.")
         append_image_job_log(job_id, "이미지 생성 요청을 보냈습니다.", 30)

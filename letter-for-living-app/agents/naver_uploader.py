@@ -418,7 +418,7 @@ def open_naver_writer(
         cleaned = []
         for line in lines:
             stripped = line.lstrip()
-            stripped = re.sub(r"^[-•]+\s*", "", stripped)
+            stripped = re.sub(r"^([-•]\s*)+", "", stripped)
             if stripped:
                 cleaned.append(f"• {stripped}")
         return "\n".join(cleaned).strip()
@@ -428,10 +428,22 @@ def open_naver_writer(
         cleaned = []
         for line in lines:
             stripped = line.lstrip()
-            stripped = re.sub(r"^[-•]+\s*", "", stripped)
+            stripped = re.sub(r"^([-•]\s*)+", "", stripped)
             if stripped:
                 cleaned.append(f"• {stripped}")
         return "\n".join(cleaned).strip()
+
+    def split_hashtags(text: str) -> tuple[str, str]:
+        if "#" not in text:
+            return text, ""
+        match = re.search(r"(?:\s|^)(#\S+(?:\s+#\S+)*)\s*$", text)
+        if not match:
+            return text, ""
+        hashtags = match.group(1).strip()
+        if "http" in hashtags:
+            return text, ""
+        cleaned = text[: match.start(1)].rstrip()
+        return cleaned, hashtags
 
     def normalize_qa_text(text: str) -> str:
         cleaned = text.replace("\r\n", "\n").strip()
@@ -779,6 +791,21 @@ def open_naver_writer(
                 else:
                     closing_paragraph = last
                     paragraphs = paragraphs[:-1]
+
+        if not hashtags_line and paragraphs:
+            cleaned, extracted = split_hashtags(paragraphs[-1])
+            if extracted:
+                hashtags_line = format_hashtags_line(extracted)
+                if cleaned:
+                    paragraphs[-1] = cleaned
+                else:
+                    paragraphs = paragraphs[:-1]
+
+        if not hashtags_line and closing_paragraph:
+            cleaned, extracted = split_hashtags(closing_paragraph)
+            if extracted:
+                hashtags_line = format_hashtags_line(extracted)
+                closing_paragraph = cleaned
         cleaned_image_paths = [
             path for path in (image_paths or []) if path and Path(path).exists()
         ]

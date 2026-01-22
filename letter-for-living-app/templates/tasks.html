@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>할일목록</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="top-nav">
+      <a href="/">홈</a>
+      <a href="/tasks">할일목록</a>
+      <a href="/planner">작업플래너</a>
+      <a href="/blog">블로그자동화</a>
+      <a href="/settings">설정</a>
+    </nav>
+    <main class="layout tasks-layout">
+      <header class="hero full-span">
+        <h1>할일목록</h1>
+        <p>매일 해야 하는 일을 기록하고 체크하세요.</p>
+      </header>
+
+      {% if error %}
+      <div class="toast full-span" data-message="{{ error }}"></div>
+      {% elif notice %}
+      <div class="toast full-span" data-message="{{ notice }}"></div>
+      {% endif %}
+
+      <section class="content">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>오늘의 할 일</h2>
+          </div>
+          {% if display_tasks %}
+          <div class="task-list">
+            {% for task in display_tasks %}
+            <div class="task-item {% if task.done %}done{% endif %}">
+              <div class="task-header">
+                <form method="post" class="task-toggle">
+                  <input type="hidden" name="action" value="toggle_task" />
+                  <input type="hidden" name="task_id" value="{{ task.id }}" />
+                  <label class="task-label">
+                    <input
+                      type="checkbox"
+                      {% if task.done %}checked{% endif %}
+                      onchange="this.form.submit()"
+                    />
+                    <span>
+                      <strong>{{ task.title or task.text }}</strong>
+                    </span>
+                  </label>
+                </form>
+                {% if task.repeat or task.start_date or task.end_date or task.time %}
+                <div class="task-meta">
+                  {% if task.repeat %}
+                  {% if task.repeat_interval == "alternate" %}
+                  <span>격일</span>
+                  {% elif task.repeat_interval == "weekly" %}
+                  <span>격주</span>
+                  {% else %}
+                  <span>매일</span>
+                  {% endif %}
+                  {% if task.repeat_start_date %}<span>시작 {{ task.repeat_start_date }}</span>{% endif %}
+                  {% endif %}
+                  {% if task.start_date %}<span>{{ task.start_date }}</span>{% endif %}
+                  {% if task.end_date %}<span>~ {{ task.end_date }}</span>{% endif %}
+                  {% if task.time %}<span>{{ task.time }}</span>{% endif %}
+                </div>
+                {% endif %}
+                <div class="task-actions">
+                  <button
+                    type="button"
+                    class="ghost-link edit-task"
+                    data-id="{{ task.id }}"
+                    data-title="{{ (task.title or task.text)|e }}"
+                    data-text="{{ task.text|e }}"
+                    data-items="{% if task.get('items') %}{{ task.get('items') | map(attribute='text') | join('\n') | e }}{% else %}{{ task.text|e }}{% endif %}"
+                    data-repeat="{{ 'yes' if task.repeat else 'no' }}"
+                    data-repeat-interval="{{ task.repeat_interval or 'daily' }}"
+                    data-repeat-start="{{ task.repeat_start_date or '' }}"
+                    data-start="{{ task.start_date or '' }}"
+                    data-end="{{ task.end_date or '' }}"
+                    data-time="{{ task.time or '' }}"
+                  >
+                    수정
+                  </button>
+                  <form method="post" class="task-delete">
+                    <input type="hidden" name="action" value="delete_task" />
+                    <input type="hidden" name="task_id" value="{{ task.id }}" />
+                    <button type="submit" class="ghost-link delete-icon" data-confirm="삭제하시겠습니까?">
+                      ×
+                    </button>
+                  </form>
+                </div>
+              </div>
+              <div class="task-body">
+                {% if task.text and not task.get("items") %}
+                <div class="task-detail">{{ task.text }}</div>
+                {% endif %}
+                {% if task.get("items") %}
+                <div class="task-sublist">
+                  {% for item in task.get("items", []) %}
+                  <form method="post" class="task-subitem">
+                    <input type="hidden" name="action" value="toggle_subtask" />
+                    <input type="hidden" name="task_id" value="{{ task.id }}" />
+                    <input type="hidden" name="item_id" value="{{ item.get('id') }}" />
+                    <label>
+                      <input
+                        type="checkbox"
+                        {% if item.get("done") %}checked{% endif %}
+                        onchange="this.form.submit()"
+                      />
+                      <span class="{% if item.get('done') %}done{% endif %}">
+                        {{ item.get("text") }}
+                      </span>
+                    </label>
+                  </form>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="meta">등록된 할 일이 없습니다.</p>
+          {% endif %}
+        </section>
+
+      </section>
+      <aside class="sidebar">
+        <section class="panel">
+          <div class="panel-header">
+            <div class="calendar-toolbar">
+              <a
+                class="ghost-link calendar-nav-btn"
+                href="{{ url_for('tasks', year=prev_year, month=prev_month) }}"
+                aria-label="이전 달"
+              >
+                ‹
+              </a>
+              <span class="calendar-month">{{ year }}년 {{ month }}월</span>
+              <a
+                class="ghost-link calendar-nav-btn"
+                href="{{ url_for('tasks', year=next_year, month=next_month) }}"
+                aria-label="다음 달"
+              >
+                ›
+              </a>
+            </div>
+            <div class="calendar-subheader">
+              <button type="button" class="ghost-link" id="openScheduleModal">일정 추가</button>
+            </div>
+          </div>
+          <div class="section-divider"></div>
+          <div class="calendar-grid">
+            <div class="calendar-weekday">일</div>
+            <div class="calendar-weekday">월</div>
+            <div class="calendar-weekday">화</div>
+            <div class="calendar-weekday">수</div>
+            <div class="calendar-weekday">목</div>
+            <div class="calendar-weekday">금</div>
+            <div class="calendar-weekday">토</div>
+            {% for week in weeks %}
+            {% for day in week %}
+            <div
+              class="calendar-cell calendar-day-cell {% if day.month != month %}muted{% endif %} {% if day == today %}today{% endif %}"
+              data-date="{{ day.isoformat() }}"
+              role="button"
+              tabindex="0"
+              aria-label="{{ day.isoformat() }} 일정 보기"
+            >
+              <div class="calendar-day">{{ day.day }}</div>
+              <div class="calendar-summary">
+                {% set daily = daily_tasks.get(day, []) %}
+                {% set holidays = holiday_map.get(day.isoformat(), []) %}
+                {% if daily %}
+                <div class="calendar-tag">오늘 할 일 {{ daily|length }}개</div>
+                {% endif %}
+                {% for label in holidays %}
+                <div class="calendar-holiday">{{ label }}</div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endfor %}
+            {% endfor %}
+          </div>
+        </section>
+      </aside>
+    </main>
+    <div class="modal" id="calendarDetailModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendarDetailTitle"
+      >
+        <div class="modal-header">
+          <h3 id="calendarDetailTitle">일정 상세</h3>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="calendar-detail-date" id="calendarDetailDate"></div>
+          <div class="calendar-detail-tags" id="calendarDetailTags"></div>
+          <div class="calendar-detail-list" id="calendarDetailList"></div>
+        </div>
+      </div>
+    </div>
+    <div class="side-panel" id="quickLinksPanel" aria-hidden="true">
+      <div class="side-panel-overlay" data-close="true"></div>
+      <div
+        class="side-panel-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="quickLinksPanelTitle"
+      >
+        <div class="side-panel-header">
+          <h2 id="quickLinksPanelTitle">업무 바로가기</h2>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+        <div class="side-panel-body">
+          <div class="quick-links" id="quickLinks">
+            {% if quick_links %}
+            {% for link in quick_links %}
+            <div class="quick-link-item" draggable="true" data-id="{{ link.id }}">
+              <a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">
+                {{ link.title }}
+              </a>
+              <form method="post">
+                <input type="hidden" name="action" value="delete_quick_link" />
+                <input type="hidden" name="link_id" value="{{ link.id }}" />
+                <button type="submit" class="ghost-link delete-icon" data-confirm="삭제하시겠습니까?">
+                  ×
+                </button>
+              </form>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="meta">등록된 바로가기가 없습니다.</p>
+            {% endif %}
+            <form method="post" class="quick-link-form">
+              <input type="hidden" name="action" value="add_quick_link" />
+              <input type="text" name="quick_title" placeholder="이름" />
+              <input type="url" name="quick_url" placeholder="https://..." />
+              <button type="submit" class="ghost-link">추가</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button
+      type="button"
+      class="quick-fab"
+      id="openQuickLinksPanel"
+      aria-label="업무 바로가기 열기"
+    >
+      ‹
+    </button>
+    <div class="modal" id="scheduleModal" aria-hidden="true">
+      <div class="modal-overlay" data-close="true"></div>
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="scheduleModalTitle"
+      >
+        <div class="modal-header">
+          <h3 id="scheduleModalTitle">일정 추가</h3>
+          <button type="button" class="modal-close" data-close="true">
+            닫기
+          </button>
+        </div>
+        <div class="modal-body">
+          <form method="post" class="task-form">
+            <input type="hidden" name="action" value="add_task" id="scheduleAction" />
+            <input type="hidden" name="task_id" value="" id="scheduleTaskId" />
+            <div class="form-row">
+              <div class="label-col">일정명</div>
+              <div class="field-col">
+                <input
+                  type="text"
+                  name="task_title"
+                  placeholder="예: 아침 루틴"
+                  id="taskTitleInput"
+                />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">업무내용</div>
+              <div class="field-col">
+                <textarea
+                  name="task_text"
+                  placeholder="한 줄에 하나씩 입력해 주세요."
+                  rows="4"
+                  id="taskTextInput"
+                ></textarea>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="label-col">구분</div>
+              <div class="field-col">
+                <select name="repeat" id="repeatSelect">
+                  <option value="no">반복 안 함</option>
+                  <option value="yes">반복</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row repeat-options" id="repeatOptions">
+              <div class="label-col">반복설정</div>
+              <div class="field-col">
+                <div class="field-subrow date-range">
+                  <select name="repeat_interval" id="repeatIntervalSelect">
+                    <option value="daily">매일</option>
+                    <option value="alternate">격일</option>
+                    <option value="weekly">격주</option>
+                  </select>
+                  <span class="repeat-prefix">기준일</span>
+                  <input
+                    type="date"
+                    name="repeat_start_date"
+                    id="repeatStartDateInput"
+                    placeholder="기준일"
+                  />
+                </div>
+              </div>
+            </div>
+            <div
+              class="form-row optional-toggle"
+              id="toggleOptionalFields"
+              role="button"
+              tabindex="0"
+              aria-expanded="false"
+              aria-controls="optionalFields"
+            >
+              선택사항
+            </div>
+            <div class="accordion-panel" id="optionalFields">
+              <div class="form-row">
+                <div class="label-col">날짜</div>
+                <div class="field-col">
+                  <div class="field-subrow date-range">
+                    <input
+                      type="date"
+                      name="start_date"
+                      data-today="{{ today }}"
+                      id="startDateInput"
+                    />
+                    <span class="date-sep">~</span>
+                    <input
+                      type="date"
+                      name="end_date"
+                      data-today="{{ today }}"
+                      id="endDateInput"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="label-col">시간</div>
+                <div class="field-col">
+                  <div class="field-subrow date-range">
+                    <input type="time" name="time_start" id="timeStartInput" />
+                    <span class="date-sep">~</span>
+                    <input type="time" name="time_end" id="timeEndInput" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="submit-row">
+              <button type="submit" class="submit-button" id="scheduleSubmit">
+                등록
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <script>
+      const toastEl = document.querySelector(".toast");
+      if (toastEl && toastEl.dataset.message) {
+        const msg = toastEl.dataset.message;
+        const container = document.createElement("div");
+        container.className = "toast-container";
+        container.textContent = msg;
+        document.body.appendChild(container);
+        setTimeout(() => container.classList.add("show"), 10);
+        setTimeout(() => {
+          container.classList.remove("show");
+          setTimeout(() => container.remove(), 300);
+        }, 3000);
+      }
+
+      const openScheduleModal = document.getElementById("openScheduleModal");
+      const scheduleModal = document.getElementById("scheduleModal");
+      const toggleOptionalFields = document.getElementById("toggleOptionalFields");
+      const optionalFields = document.getElementById("optionalFields");
+      const scheduleAction = document.getElementById("scheduleAction");
+      const scheduleTaskId = document.getElementById("scheduleTaskId");
+      const scheduleTitle = document.getElementById("taskTitleInput");
+      const scheduleText = document.getElementById("taskTextInput");
+      const repeatSelect = document.getElementById("repeatSelect");
+      const repeatOptions = document.getElementById("repeatOptions");
+      const repeatIntervalSelect = document.getElementById("repeatIntervalSelect");
+      const repeatStartDateInput = document.getElementById("repeatStartDateInput");
+      const scheduleSubmit = document.getElementById("scheduleSubmit");
+      const scheduleTitleText = document.getElementById("scheduleModalTitle");
+      const startDateInput = document.getElementById("startDateInput");
+      const endDateInput = document.getElementById("endDateInput");
+      const timeStartInput = document.getElementById("timeStartInput");
+      const timeEndInput = document.getElementById("timeEndInput");
+      if (openScheduleModal && scheduleModal) {
+        const closeModal = () => {
+          scheduleModal.classList.remove("open");
+          scheduleModal.setAttribute("aria-hidden", "true");
+        };
+        const closeOptional = () => {
+          if (!optionalFields) return;
+          optionalFields.style.maxHeight = "0px";
+          optionalFields.classList.remove("open");
+          if (toggleOptionalFields) {
+            toggleOptionalFields.setAttribute("aria-expanded", "false");
+          }
+        };
+        const openOptional = () => {
+          if (!optionalFields) return;
+          optionalFields.classList.add("open");
+          optionalFields.style.maxHeight = `${optionalFields.scrollHeight}px`;
+          if (toggleOptionalFields) {
+            toggleOptionalFields.setAttribute("aria-expanded", "true");
+          }
+        };
+        const resetModal = () => {
+          if (scheduleAction) scheduleAction.value = "add_task";
+          if (scheduleTaskId) scheduleTaskId.value = "";
+          if (scheduleTitle) scheduleTitle.value = "";
+          if (scheduleText) scheduleText.value = "";
+          if (repeatSelect) repeatSelect.value = "no";
+          if (repeatIntervalSelect) repeatIntervalSelect.value = "daily";
+          if (repeatStartDateInput) repeatStartDateInput.value = "";
+          if (repeatOptions) repeatOptions.classList.remove("open");
+          if (scheduleSubmit) scheduleSubmit.textContent = "등록";
+          if (scheduleTitleText) scheduleTitleText.textContent = "일정 추가";
+          if (startDateInput) startDateInput.value = "";
+          if (endDateInput) endDateInput.value = "";
+          if (timeStartInput) timeStartInput.value = "";
+          if (timeEndInput) timeEndInput.value = "";
+          closeOptional();
+        };
+        const openModal = () => {
+          scheduleModal.classList.add("open");
+          scheduleModal.setAttribute("aria-hidden", "false");
+        };
+        const openForAdd = () => {
+          resetModal();
+          const todayValue = startDateInput ? startDateInput.dataset.today : "";
+          if (repeatStartDateInput && !repeatStartDateInput.value) {
+            repeatStartDateInput.value = todayValue || "";
+          }
+          openModal();
+        };
+        openScheduleModal.addEventListener("click", openForAdd);
+        scheduleModal.addEventListener("click", (event) => {
+          if (event.target && event.target.dataset && event.target.dataset.close) {
+            closeModal();
+          }
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape" && scheduleModal.classList.contains("open")) {
+            closeModal();
+          }
+        });
+        const toggleOptional = () => {
+          if (!optionalFields || !toggleOptionalFields) return;
+          const isOpen = optionalFields.classList.toggle("open");
+          toggleOptionalFields.setAttribute("aria-expanded", String(isOpen));
+          if (isOpen) {
+            optionalFields.style.maxHeight = `${optionalFields.scrollHeight}px`;
+          } else {
+            optionalFields.style.maxHeight = "0px";
+          }
+        };
+        if (repeatSelect && repeatOptions) {
+          repeatSelect.addEventListener("change", () => {
+            const isRepeat = repeatSelect.value === "yes";
+            repeatOptions.classList.toggle("open", isRepeat);
+          });
+        }
+        if (toggleOptionalFields && optionalFields) {
+          toggleOptionalFields.addEventListener("click", toggleOptional);
+          toggleOptionalFields.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggleOptional();
+            }
+          });
+        }
+        const editButtons = document.querySelectorAll(".edit-task");
+        editButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            if (!button.dataset) return;
+            resetModal();
+            if (scheduleAction) scheduleAction.value = "update_task";
+            if (scheduleTaskId) scheduleTaskId.value = button.dataset.id || "";
+            if (scheduleTitle) scheduleTitle.value = button.dataset.title || "";
+            if (scheduleText) {
+              scheduleText.value = button.dataset.items || button.dataset.text || "";
+            }
+            if (repeatSelect) repeatSelect.value = button.dataset.repeat || "no";
+            if (repeatIntervalSelect) {
+              repeatIntervalSelect.value = button.dataset.repeatInterval || "daily";
+            }
+            if (repeatStartDateInput) {
+              repeatStartDateInput.value =
+                button.dataset.repeatStart ||
+                (startDateInput ? startDateInput.dataset.today || "" : "");
+            }
+            if (repeatOptions) {
+              repeatOptions.classList.toggle("open", button.dataset.repeat === "yes");
+            }
+            if (scheduleSubmit) scheduleSubmit.textContent = "수정";
+            if (scheduleTitleText) scheduleTitleText.textContent = "일정 수정";
+            const startValue = button.dataset.start || "";
+            const endValue = button.dataset.end || "";
+            const timeValue = button.dataset.time || "";
+            if (startDateInput) startDateInput.value = startValue;
+            if (endDateInput) endDateInput.value = endValue;
+            if (timeValue) {
+              const parts = timeValue.split("~").map((part) => part.trim());
+              if (timeStartInput) timeStartInput.value = parts[0] || "";
+              if (timeEndInput) timeEndInput.value = parts[1] || "";
+            }
+            openModal();
+            if (startValue || endValue || timeValue) {
+              requestAnimationFrame(() => {
+                openOptional();
+                if (optionalFields) {
+                  optionalFields.style.maxHeight = `${optionalFields.scrollHeight}px`;
+                }
+              });
+            }
+          });
+        });
+
+        const deleteButtons = document.querySelectorAll(".delete-icon");
+        deleteButtons.forEach((button) => {
+          button.addEventListener("click", (event) => {
+            const message = button.dataset.confirm || "삭제하시겠습니까?";
+            if (!confirm(message)) {
+              event.preventDefault();
+            }
+          });
+        });
+
+        const quickLinks = document.getElementById("quickLinks");
+        if (quickLinks) {
+          let draggedItem = null;
+          const serializeOrder = () =>
+            Array.from(quickLinks.querySelectorAll(".quick-link-item"))
+              .map((item) => item.dataset.id || "")
+              .filter((id) => id)
+              .join(",");
+
+          const sendOrder = () => {
+            const order = serializeOrder();
+            if (!order) return;
+            const body = new URLSearchParams();
+            body.set("action", "reorder_quick_links");
+            body.set("order", order);
+            fetch("/tasks", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: body.toString(),
+            }).catch(() => {});
+          };
+
+          quickLinks.addEventListener("dragstart", (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) return;
+            const item = target.closest(".quick-link-item");
+            if (!item) return;
+            draggedItem = item;
+            item.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+          });
+
+          quickLinks.addEventListener("dragend", () => {
+            if (draggedItem) {
+              draggedItem.classList.remove("dragging");
+            }
+            draggedItem = null;
+            sendOrder();
+          });
+
+          quickLinks.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) return;
+            const item = target.closest(".quick-link-item");
+            if (!item || item === draggedItem) return;
+            const rect = item.getBoundingClientRect();
+            const shouldInsertBefore = event.clientY < rect.top + rect.height / 2;
+            if (shouldInsertBefore) {
+              quickLinks.insertBefore(draggedItem, item);
+            } else {
+              quickLinks.insertBefore(draggedItem, item.nextSibling);
+            }
+          });
+        }
+
+        const quickLinksPanel = document.getElementById("quickLinksPanel");
+        const openQuickLinksPanel = document.getElementById("openQuickLinksPanel");
+        if (openQuickLinksPanel && quickLinksPanel) {
+          const closePanel = () => {
+            quickLinksPanel.classList.remove("open");
+            quickLinksPanel.setAttribute("aria-hidden", "true");
+          };
+          const openPanel = () => {
+            quickLinksPanel.classList.add("open");
+            quickLinksPanel.setAttribute("aria-hidden", "false");
+          };
+          openQuickLinksPanel.addEventListener("click", openPanel);
+          quickLinksPanel.addEventListener("click", (event) => {
+            if (event.target && event.target.dataset && event.target.dataset.close) {
+              closePanel();
+            }
+          });
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && quickLinksPanel.classList.contains("open")) {
+              closePanel();
+            }
+          });
+        }
+
+        const calendarData = {{ calendar_data | tojson }};
+        const calendarModal = document.getElementById("calendarDetailModal");
+        const calendarDateEl = document.getElementById("calendarDetailDate");
+        const calendarTagsEl = document.getElementById("calendarDetailTags");
+        const calendarListEl = document.getElementById("calendarDetailList");
+        const dayCells = document.querySelectorAll(".calendar-day-cell");
+        const openCalendarModal = (date) => {
+          if (!calendarModal) return;
+          const payload = calendarData[date] || { holidays: [], tasks: [] };
+          if (calendarDateEl) calendarDateEl.textContent = date;
+          if (calendarTagsEl) {
+            calendarTagsEl.innerHTML = "";
+            payload.holidays.forEach((label) => {
+              const tag = document.createElement("span");
+              tag.className = "calendar-holiday";
+              tag.textContent = label;
+              calendarTagsEl.appendChild(tag);
+            });
+          }
+          if (calendarListEl) {
+            calendarListEl.innerHTML = "";
+            if (!payload.tasks.length) {
+              const empty = document.createElement("p");
+              empty.className = "meta";
+              empty.textContent = "등록된 일정이 없습니다.";
+              calendarListEl.appendChild(empty);
+            } else {
+              payload.tasks.forEach((task) => {
+                const card = document.createElement("div");
+                card.className = "calendar-detail-item";
+                const title = document.createElement("strong");
+                title.textContent = task.title;
+                card.appendChild(title);
+                if (task.time) {
+                  const time = document.createElement("div");
+                  time.className = "meta";
+                  time.textContent = task.time;
+                  card.appendChild(time);
+                }
+                if (task.items && task.items.length) {
+                  const list = document.createElement("ul");
+                  list.className = "calendar-detail-sublist";
+                  task.items.forEach((item) => {
+                    const li = document.createElement("li");
+                    li.textContent = item;
+                    list.appendChild(li);
+                  });
+                  card.appendChild(list);
+                } else if (task.text) {
+                  const desc = document.createElement("div");
+                  desc.className = "meta";
+                  desc.textContent = task.text;
+                  card.appendChild(desc);
+                }
+                calendarListEl.appendChild(card);
+              });
+            }
+          }
+          calendarModal.classList.add("open");
+          calendarModal.setAttribute("aria-hidden", "false");
+        };
+        dayCells.forEach((cell) => {
+          cell.addEventListener("click", () => {
+            const date = cell.dataset.date;
+            if (date) openCalendarModal(date);
+          });
+          cell.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              const date = cell.dataset.date;
+              if (date) openCalendarModal(date);
+            }
+          });
+        });
+        if (calendarModal) {
+          calendarModal.addEventListener("click", (event) => {
+            if (event.target && event.target.dataset && event.target.dataset.close) {
+              calendarModal.classList.remove("open");
+              calendarModal.setAttribute("aria-hidden", "true");
+            }
+          });
+        }
+      }
+    </script>
+  </body>
+</html>

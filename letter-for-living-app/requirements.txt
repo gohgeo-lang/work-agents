@@ -1,3 +1,4 @@
 Flask==3.0.3
 requests==2.32.3
 selenium==4.23.1
+korean-lunar-calendar==0.3.1
