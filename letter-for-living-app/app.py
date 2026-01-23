@@ -328,9 +328,89 @@ def load_quick_links(path: Path) -> list[dict]:
     return []
 
 
+def apply_shorts_guidelines(
+    guidelines: str,
+    script_count: int,
+    script_len: int,
+    ratio: str,
+) -> str:
+    if not guidelines:
+        return ""
+    text = guidelines
+    text = text.replace("{스크립트_갯수}", str(script_count))
+    text = text.replace("{스크립트_당_글자수}", str(script_len))
+    text = text.replace("{이미지_비율}", ratio)
+    return text.strip()
+
+
+def build_shorts_script_prompt(
+    keyword: str,
+    guidelines: str,
+    script_count: int,
+    script_len: int,
+    topic: str | None = None,
+    ratio: str = "9:16",
+) -> str:
+    guideline_block = apply_shorts_guidelines(guidelines, script_count, script_len, ratio)
+    guidelines_text = f"\n[지침]\n{guideline_block}\n" if guideline_block else ""
+    topic_text = f"\n[상황 주제]\n{topic.strip()}\n" if topic else ""
+    return f"""
+너는 유튜브 쇼츠 대본을 쓰는 전문 작가다.
+키워드를 바탕으로 자연스럽고 간결한 대본을 작성한다.
+{guidelines_text}
+{topic_text}
+지침이 가장 우선이며, 아래 상세 설정은 지침을 훼손하지 않는 범위에서만 반영한다.
+
+[출력 규칙]
+- 스크립트 {script_count}개를 작성한다. (지침과 충돌 시 지침을 우선)
+- 각 스크립트는 대략 {script_len}자 내외로 작성한다. (지침과 충돌 시 지침을 우선)
+- 군더더기 없이 바로 말문을 여는 구어체 톤.
+- 제목, 해시태그, 이모지는 쓰지 않는다.
+
+[키워드]
+{keyword}
+
+아래 형식으로 출력한다. (번호/괄호 고정)
+1.(대사)
+2.(대사)
+3.(대사)
+""".strip()
+
+
 def save_quick_links(path: Path, links: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(links, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def parse_shorts_topics(text: str) -> list[str]:
+    lines = []
+    for raw in text.splitlines():
+        cleaned = raw.strip()
+        if not cleaned:
+            continue
+        cleaned = re.sub(r"^[0-9]+[.)]\\s*", "", cleaned)
+        cleaned = re.sub(r"^[-•]\\s*", "", cleaned)
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def build_shorts_topic_prompt(keyword: str, guidelines: str) -> str:
+    guideline_block = guidelines.strip()
+    guidelines_text = f"\n[지침]\n{guideline_block}\n" if guideline_block else ""
+    return f"""
+너는 유튜브 쇼츠의 대화 주제를 제안하는 기획자다.
+키워드를 바탕으로 대화로 풀기 좋은 상황 주제 3가지를 제안한다.
+{guidelines_text}
+
+[키워드]
+{keyword}
+
+출력 규칙:
+- 3줄로만 출력한다.
+- 각 줄은 상황 주제 한 개.
+- 번호, 따옴표, 불릿 없이 텍스트만 출력한다.
+""".strip()
     
 
 def read_used_verses(path: Path) -> set[str]:
@@ -495,6 +575,44 @@ DEFAULT_THEME_LIST = [
     "7. Walk Bold:결단 / 용기 / 행동",
     "8. Known and Named:정체성 / 존재",
 ]
+
+DEFAULT_SHORTS_GUIDELINES = """
+너는 ‘썰쇼츠(Short-form Story Shorts)’ 전문 대본 생성기다.
+
+[기본 컨셉]
+- 썰쇼츠는 ‘일상에서 실제로 있었을 법한 상황’을 1인칭 시점으로 풀어낸다.
+- 정보 전달, 광고, 설명 금지
+- 그냥 썰이다. 결론도 교훈도 없다.
+- 과장된 밈 말투, 자연스러운 구어체, MZ스럽게 말투 사용
+- 남녀 연인 / 친구 / 가족 등 관계는 상황에 맞게 자연스럽게 설정
+
+[대본 구조 규칙]
+- 전체 스크립트 수: {스크립트_갯수}
+- 각 스크립트는 독립된 한 줄 대사
+- 각 줄은 최대 {스크립트_당_글자수}자 이내
+- 감정 흐름이 처음 -> 중반 -> 끝까지 자연스럽게 이어져야 함
+- 같은 감정 반복 금지
+
+[이미지 생성 규칙]
+- 이미지 수는 스크립트 갯수만큼 또는 직접입력한 숫자만큼
+- 각 이미지는 해당 스크립트의 상황을 ‘말 없이도 이해 가능하게’ 표현
+- 인물은 얼굴 클로즈업보다 상황 중심
+- 텍스트, 말풍선, 자막 절대 금지
+- 비율: {이미지_비율}
+- 쇼츠용 세로 구도 기준
+
+[출력 형식 – 반드시 지킬 것]
+1.(대사)
+2.(대사)
+... 스크립트 갯수 만큼
+
+[금지 사항]
+- 광고 문구
+- 제품 추천
+- “이 영상은…”
+- 해시태그
+- 설명 문장
+""".strip()
 
 
 def read_themes(path: Path) -> list[str]:
@@ -2196,6 +2314,19 @@ def run_blog_generation_job(
         )
         append_blog_job_log(job_id, "본문 생성을 시작합니다.", 15)
         blog_result = normalize_blog_result(call_openai(prompt))
+        body_text = str(blog_result.get("body", "")).strip()
+        required_sections = ["배경", "의미", "묵상", "체크리스트", "되짚어볼 질문", "요약"]
+        present: set[str] = set()
+        for line in body_text.splitlines():
+            normalized = line.strip()
+            match = re.match(r"^(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*$", normalized)
+            if match:
+                present.add(match.group(1))
+        section_status = ", ".join(
+            f"{section} {'OK' if section in present else '누락'}"
+            for section in required_sections
+        )
+        append_blog_job_log(job_id, f"섹션 점검: {section_status}", 40)
         append_blog_job_log(job_id, "본문 생성이 완료되었습니다.", 55)
 
         draft_id = f"{dt.datetime.now().strftime('%Y%m%d%H%M%S')}_{os.urandom(2).hex()}"
@@ -2703,6 +2834,125 @@ def blog():
         missing_sections=missing_sections,
         incomplete_blog=incomplete_blog,
     )
+
+
+@app.route("/shorts", methods=["GET", "POST"])
+def shorts():
+    error = session.pop("flash_error", None)
+    notice = session.pop("flash_notice", None)
+    shorts_output = session.get("shorts_output", "")
+    shorts_images = session.get("shorts_image_paths", [])
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        if action == "generate_shorts_script":
+            keyword = request.form.get("shorts_topic", "").strip()
+            picked_topic = request.form.get("shorts_topic_pick", "").strip()
+            if not keyword:
+                session["flash_error"] = "키워드를 입력해 주세요."
+                return redirect(url_for("shorts"))
+            script_count = int(request.form.get("shorts_script_count", "15") or 15)
+            script_len = int(request.form.get("shorts_script_length", "30") or 30)
+            guidelines = DEFAULT_SHORTS_GUIDELINES
+            try:
+                prompt = build_shorts_script_prompt(
+                    keyword=keyword,
+                    guidelines=guidelines,
+                    script_count=script_count,
+                    script_len=script_len,
+                    topic=picked_topic or None,
+                    ratio="9:16",
+                )
+                output = call_openai_text(
+                    prompt,
+                    system_prompt="Follow the instructions exactly.",
+                )
+                session["shorts_output"] = output
+                session["shorts_keyword"] = keyword
+                session["shorts_script_count"] = script_count
+                session["shorts_script_length"] = script_len
+                session["flash_notice"] = "대본이 생성되었습니다."
+            except Exception as exc:
+                logger.exception("Shorts script generation failed")
+                session["flash_error"] = f"대본 생성 실패: {exc}"
+            return redirect(url_for("shorts"))
+        if action == "generate_shorts_images":
+            keyword = request.form.get("shorts_topic", "").strip() or session.get("shorts_keyword", "")
+            output_text = session.get("shorts_output", "")
+            if not keyword:
+                session["flash_error"] = "키워드를 입력해 주세요."
+                return redirect(url_for("shorts"))
+            if not output_text:
+                session["flash_error"] = "먼저 대본을 생성해 주세요."
+                return redirect(url_for("shorts"))
+            guidelines = DEFAULT_SHORTS_GUIDELINES
+            count_mode = request.form.get("shorts_image_count_mode", "script_count")
+            script_count = int(session.get("shorts_script_count", 15) or 15)
+            image_count = script_count
+            if count_mode == "custom":
+                image_count = int(request.form.get("shorts_image_count", "1") or 1)
+            ratio = request.form.get("shorts_image_ratio", "9:16")
+            size_map = {
+                "9:16": "1024x1792",
+                "1:1": "1024x1024",
+                "3:4": "1024x1792",
+            }
+            size = size_map.get(ratio, "1024x1792")
+            guideline_block = apply_shorts_guidelines(
+                guidelines,
+                script_count,
+                int(session.get("shorts_script_length", 30) or 30),
+                ratio,
+            )
+            guideline_text = f"\nGuidelines:\n{guideline_block}\n" if guideline_block else ""
+            prompt_base = (
+                "Create a clean, cinematic YouTube Shorts image inspired by the keyword. "
+                "No text, no logos, no captions. Focus on mood and visual clarity.\n\n"
+                f"Keyword: {keyword}\n"
+                f"Script context:\n{output_text}\n"
+                f"{guideline_text}"
+            )
+            prompts = [prompt_base for _ in range(max(1, image_count))]
+            try:
+                images_dir = PROJECT_ROOT / "logs" / "shorts-images"
+                paths = generate_images(prompts, images_dir, size=size)
+                session["shorts_image_paths"] = [str(path) for path in paths]
+                session["flash_notice"] = "이미지를 생성했습니다."
+            except Exception as exc:
+                logger.exception("Shorts image generation failed")
+                session["flash_error"] = f"이미지 생성 실패: {exc}"
+            return redirect(url_for("shorts"))
+    return render_template(
+        "shorts.html",
+        error=error,
+        notice=notice,
+        shorts_output=shorts_output,
+        shorts_images=shorts_images,
+    )
+
+
+@app.post("/shorts/suggest")
+def shorts_suggest():
+    payload = request.get_json(silent=True) or {}
+    keyword = str(payload.get("keyword", "")).strip()
+    if not keyword:
+        return jsonify({"error": "키워드를 입력해 주세요."}), 400
+    script_count = int(payload.get("script_count", 15) or 15)
+    script_len = int(payload.get("script_len", 30) or 30)
+    ratio = str(payload.get("ratio", "9:16") or "9:16")
+    guidelines = apply_shorts_guidelines(
+        DEFAULT_SHORTS_GUIDELINES,
+        script_count,
+        script_len,
+        ratio,
+    )
+    try:
+        prompt = build_shorts_topic_prompt(keyword, guidelines)
+        text = call_openai_text(prompt, system_prompt="Follow the instructions exactly.")
+        topics = parse_shorts_topics(text)[:3]
+        return jsonify({"topics": topics})
+    except Exception as exc:
+        logger.exception("Shorts topic suggestion failed")
+        return jsonify({"error": str(exc)}), 500
 
 
 if __name__ == "__main__":

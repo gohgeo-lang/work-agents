@@ -128,6 +128,109 @@ body {
   flex: 1;
 }
 
+.shorts-split-panel {
+  padding: 0;
+}
+
+.shorts-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px;
+}
+
+.shorts-column {
+  min-width: 0;
+}
+
+.shorts-left-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.shorts-script-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.shorts-submit-row {
+  position: static;
+  justify-content: flex-start;
+  margin-top: 16px;
+  padding-top: 0;
+}
+
+.shorts-script-form .submit-row {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  transform: none;
+  z-index: auto;
+}
+
+.shorts-split .form-row {
+  grid-template-columns: 1fr;
+  border-bottom: none;
+  padding: 0 0 16px;
+}
+
+.shorts-split .label-col {
+  padding-top: 0;
+}
+
+.shorts-inline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.shorts-keyword-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shorts-keyword-row input {
+  flex: 1;
+}
+
+.shorts-input {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+}
+
+.shorts-input input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 16px 0 0 16px;
+  background: #fff;
+  margin-top: 0;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+}
+
+.shorts-input-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 16px 16px 0;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .full-span {
   grid-column: 1 / -1;
 }
@@ -764,6 +867,13 @@ button:disabled {
   cursor: pointer;
   white-space: nowrap;
   text-align: center;
+}
+
+.option-pill.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(124, 97, 71, 0.18);
+  background: #e9d6b6;
+  color: #2a1e12;
 }
 
 .blog-panel .option-pill {
@@ -2030,6 +2140,10 @@ pre {
   }
 
   .script-line {
+    grid-template-columns: 1fr;
+  }
+
+  .shorts-split {
     grid-template-columns: 1fr;
   }
 

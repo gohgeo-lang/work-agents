@@ -12,6 +12,7 @@
       <a href="/tasks">할일목록</a>
       <a href="/planner">작업플래너</a>
       <a href="/blog">블로그자동화</a>
+      <a href="/shorts">유튜브자동화</a>
       <a href="/settings">설정</a>
     </nav>
     <main class="layout full blog-layout">
@@ -642,16 +643,44 @@
         }
       };
 
+      const appendProgressLog = (message) => {
+        if (!progressLogs || !message) return;
+        const row = document.createElement("div");
+        row.className = "progress-log";
+        row.textContent = message;
+        progressLogs.appendChild(row);
+        progressLogs.scrollTop = progressLogs.scrollHeight;
+      };
+
+      const hideImageRetryControls = () => {
+        if (imageRetryControls) {
+          imageRetryControls.hidden = true;
+          imageRetryControls.style.display = "none";
+        }
+        if (imagePromptEditorWrap) {
+          imagePromptEditorWrap.hidden = true;
+        }
+      };
+
+      const showImageRetryControls = () => {
+        if (imageRetryControls) {
+          imageRetryControls.hidden = false;
+          imageRetryControls.style.display = "grid";
+        }
+      };
+
       const openProgressModal = () => {
         if (!progressModal) return;
         progressModal.classList.add("open");
         progressModal.setAttribute("aria-hidden", "false");
         if (closeProgressModal) {
-          closeProgressModal.disabled = true;
+          closeProgressModal.disabled = false;
         }
         if (progressTitle) {
           progressTitle.textContent = "이미지 생성 진행 상황";
         }
+        setProgress(1, "요청 대기");
+        appendProgressLog("이미지 모달을 열었습니다.");
         hideImageRetryControls();
       };
 
@@ -743,29 +772,41 @@
         if (progressLogs) {
           progressLogs.innerHTML = "";
         }
-        fetch("/blog/images/start", {
-          method: "POST",
-          headers: { "X-Requested-With": "fetch" },
-        })
-          .then((resp) => resp.json())
-          .then((data) => {
-            if (data.error) {
-              setProgress(0, data.error);
+        appendProgressLog("이미지 생성 요청을 시작합니다.");
+        try {
+          fetch("/blog/images/start", {
+            method: "POST",
+            headers: { "X-Requested-With": "fetch" },
+          })
+            .then((resp) => resp.json())
+            .then((data) => {
+              if (data.error) {
+                setProgress(0, data.error);
+                appendProgressLog(`오류: ${data.error}`);
+                if (closeProgressModal) {
+                  closeProgressModal.disabled = false;
+                }
+                showImageRetryControls();
+                return;
+              }
+              pollStatus(data.job_id);
+            })
+            .catch((err) => {
+              setProgress(0, "이미지 요청을 시작하지 못했습니다.");
+              appendProgressLog(`요청 실패: ${err ? String(err) : "unknown"}`);
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
               showImageRetryControls();
-              return;
-            }
-            pollStatus(data.job_id);
-          })
-          .catch(() => {
-            setProgress(0, "이미지 요청을 시작하지 못했습니다.");
-            if (closeProgressModal) {
-              closeProgressModal.disabled = false;
-            }
-            showImageRetryControls();
-          });
+            });
+        } catch (err) {
+          setProgress(0, "이미지 요청을 시작하지 못했습니다.");
+          appendProgressLog(`예외: ${err ? String(err) : "unknown"}`);
+          if (closeProgressModal) {
+            closeProgressModal.disabled = false;
+          }
+          showImageRetryControls();
+        }
       });
 
       const startImageJob = (payload) => {
