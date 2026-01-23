@@ -456,6 +456,7 @@
       const progressStatus = document.getElementById("progressStatus");
       const progressLogs = document.getElementById("progressLogs");
       const imageRetryControls = document.getElementById("imageRetryControls");
+      const imagePromptEditorWrap = document.getElementById("imagePromptEditorWrap");
       let pollTimer = null;
 
       const setProgress = (value, status) => {
@@ -471,6 +472,23 @@
         }
       };
 
+      const hideImageRetryControls = () => {
+        if (imageRetryControls) {
+          imageRetryControls.hidden = true;
+          imageRetryControls.style.display = "none";
+        }
+        if (imagePromptEditorWrap) {
+          imagePromptEditorWrap.hidden = true;
+        }
+      };
+
+      const showImageRetryControls = () => {
+        if (imageRetryControls) {
+          imageRetryControls.hidden = false;
+          imageRetryControls.style.display = "grid";
+        }
+      };
+
       const openProgressModal = () => {
         if (!progressModal) return;
         progressModal.classList.add("open");
@@ -480,6 +498,10 @@
         }
         if (imageRetryControls) {
           imageRetryControls.hidden = true;
+          imageRetryControls.style.display = "none";
+        }
+        if (imagePromptEditorWrap) {
+          imagePromptEditorWrap.hidden = true;
         }
       };
 
@@ -630,12 +652,7 @@
         if (progressTitle) {
           progressTitle.textContent = "이미지 생성 진행 상황";
         }
-        if (imageRetryControls) {
-          imageRetryControls.hidden = true;
-        }
-        if (imagePromptEditorWrap) {
-          imagePromptEditorWrap.hidden = true;
-        }
+        hideImageRetryControls();
       };
 
       const closeProgress = () => {
@@ -696,9 +713,7 @@
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
-              if (imageRetryControls) {
-                imageRetryControls.hidden = false;
-              }
+              showImageRetryControls();
               const errorText = String(data.error || "");
               const isPolicyError =
                 errorText.includes("moderation_blocked") ||
@@ -739,9 +754,7 @@
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
-              if (imageRetryControls) {
-                imageRetryControls.hidden = false;
-              }
+              showImageRetryControls();
               return;
             }
             pollStatus(data.job_id);
@@ -751,9 +764,7 @@
             if (closeProgressModal) {
               closeProgressModal.disabled = false;
             }
-            if (imageRetryControls) {
-              imageRetryControls.hidden = false;
-            }
+            showImageRetryControls();
           });
       });
 
@@ -778,9 +789,7 @@
               if (closeProgressModal) {
                 closeProgressModal.disabled = false;
               }
-              if (imageRetryControls) {
-                imageRetryControls.hidden = false;
-              }
+              showImageRetryControls();
               return;
             }
             pollStatus(data.job_id);
@@ -790,9 +799,7 @@
             if (closeProgressModal) {
               closeProgressModal.disabled = false;
             }
-            if (imageRetryControls) {
-              imageRetryControls.hidden = false;
-            }
+            showImageRetryControls();
           });
       };
 

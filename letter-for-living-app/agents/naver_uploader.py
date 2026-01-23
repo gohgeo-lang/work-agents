@@ -374,6 +374,7 @@ def open_naver_writer(
 
     def parse_section_heading(text: str) -> str | None:
         normalized = re.sub(r"^\s*#+\s*", "", text.strip())
+        normalized = re.sub(r"^\s*[-•*]\s*", "", normalized)
         match = re.match(
             r"^(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*[:：]?$",
             normalized,
@@ -403,8 +404,8 @@ def open_naver_writer(
                     processed.append(heading)
                     continue
                 inline_match = re.match(
-                    r"^(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*[:：]\s*(.+)$",
-                    line,
+                    r"^[-•*]?\s*(배경|의미|묵상|체크리스트|되짚어볼 질문|요약)\s*[:：-]\s*(.+)$",
+                    line.strip(),
                 )
                 if inline_match:
                     if buffer:
@@ -435,6 +436,7 @@ def open_naver_writer(
             stripped = line.lstrip()
             stripped = re.sub(r"^([-•]\s*)+", "", stripped)
             if stripped:
+                stripped = re.sub(r"^-\s+", "", stripped)
                 cleaned.append(f"• {stripped}")
         return "\n".join(cleaned).strip()
 
@@ -562,12 +564,29 @@ def open_naver_writer(
     def insert_qa_block(target_el, text: str) -> None:
         lines = text.replace("\r\n", "\n").split("\n")
         first = True
+        try:
+            target_el.click()
+        except Exception:
+            pass
+
         def insert_enter() -> None:
             try:
                 ActionChains(driver).send_keys(Keys.ENTER).perform()
             except Exception:
                 try:
-                    target_el.send_keys("\n")
+                    target_el.send_keys(Keys.ENTER)
+                except Exception:
+                    try:
+                        target_el.send_keys("\n")
+                    except Exception:
+                        pass
+
+        def type_qa_text(value: str) -> None:
+            try:
+                ActionChains(driver).send_keys(value).perform()
+            except Exception:
+                try:
+                    target_el.send_keys(value)
                 except Exception:
                     pass
 
@@ -580,10 +599,10 @@ def open_naver_writer(
                 continue
             if line.startswith("Q."):
                 set_bold_enabled(True)
-                set_element_text(target_el, line)
+                type_qa_text(line)
                 set_bold_enabled(False)
             else:
-                set_element_text(target_el, line)
+                type_qa_text(line)
             first = False
 
     def set_by_placeholder(match_text: str, mode: str, text_value: str) -> bool:
@@ -899,22 +918,31 @@ def open_naver_writer(
                         except Exception:
                             pass
                         bg_image_inserted = True
-                    if content_idx > 0 and not (
-                        current_section == "배경" and section_label == "의미"
-                    ):
+                    if content_idx > 0:
                         insert_horizontal_line()
+                    click_align_button("left")
                     insert_subheading(body_el, section_label)
                     current_section = section_label
                     continue
                 if content_idx in image_map:
                     insert_image(image_map[content_idx])
-                if current_section == "체크리스트":
+                if current_section == "배경":
+                    select_text_format(
+                        "본문", "button.se-toolbar-option-text-format-body-button"
+                    )
+                    click_align_button("left")
+                    set_element_text(body_el, para)
+                elif current_section == "체크리스트":
                     para = normalize_checklist_text(para)
                 if current_section == "되짚어볼 질문":
                     para = normalize_qa_text(para)
                     insert_qa_block(body_el, para)
                 else:
                     if current_section == "요약":
+                        cleaned, extracted = split_hashtags(para)
+                        if extracted and not hashtags_line:
+                            hashtags_line = format_hashtags_line(extracted)
+                            para = cleaned
                         para = normalize_bullets(para)
                     select_text_format(
                         "본문", "button.se-toolbar-option-text-format-body-button"
