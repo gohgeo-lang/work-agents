@@ -136,11 +136,21 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
-  padding: 24px;
+  padding: 0;
+  align-items: start;
+}
+
+.shorts-stack {
+  display: grid;
+  gap: 24px;
+  padding: 0;
 }
 
 .shorts-column {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .shorts-left-column {
@@ -173,7 +183,7 @@ body {
 .shorts-split .form-row {
   grid-template-columns: 1fr;
   border-bottom: none;
-  padding: 0 0 16px;
+  padding: 0 0 12px;
 }
 
 .shorts-split .label-col {
@@ -229,6 +239,12 @@ body {
   background: #fff;
   color: var(--muted);
   font-size: 12px;
+}
+
+.shorts-split .panel-header,
+.shorts-split .result-header {
+  margin-bottom: 0;
+  align-items: baseline;
 }
 
 .full-span {
@@ -1946,6 +1962,30 @@ button:disabled {
   margin: 0;
 }
 
+.shorts-plan-panel .panel-header,
+.shorts-plan-panel .result-header {
+  align-items: baseline;
+}
+
+.shorts-plan-panel .panel-header h2,
+.shorts-plan-panel .result-header h2 {
+  line-height: 1.1;
+}
+
+.shorts-plan-panel .result-header {
+  margin-top: 14px;
+}
+
+.shorts-plan-panel .panel-header .meta {
+  margin: 0 auto 0 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.shorts-plan-panel .result-plain {
+  margin-top: 8px;
+}
+
 .image-action-inline {
   margin-top: 0;
   padding: 6px 12px;
@@ -1991,6 +2031,45 @@ button:disabled {
 
 .result-card h3 {
   margin-top: 0;
+}
+
+.shorts-topic-list {
+  display: grid;
+  gap: 10px;
+}
+
+.shorts-topic-item {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 10px;
+  align-items: start;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff9f0;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.shorts-topic-item:hover {
+  transform: translateY(-2px);
+}
+
+.shorts-topic-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(197, 106, 58, 0.2);
+}
+
+.shorts-topic-number {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.shorts-topic-text {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
 }
 
 .multiline {

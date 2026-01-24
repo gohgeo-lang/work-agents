@@ -11,6 +11,7 @@ import calendar
 from pathlib import Path
 
 import requests
+from yt_dlp import YoutubeDL
 from korean_lunar_calendar import KoreanLunarCalendar
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for, send_file
 
@@ -46,6 +47,10 @@ USED_VERSES_PATH = Path(os.environ.get("LFL_USED_VERSES", DEFAULT_USED_VERSES))
 THEMES_PATH = Path(os.environ.get("LFL_THEMES", DEFAULT_THEMES))
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TRANSCRIBE_MODEL = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+OPENAI_TRANSCRIBE_LANGUAGE = os.environ.get("OPENAI_TRANSCRIBE_LANGUAGE", "ko")
+YTDLP_COOKIE_PATH = os.environ.get("YTDLP_COOKIE_PATH", "")
+YTDLP_COOKIES_FROM_BROWSER = os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "")
 
 BRIEFS_DIR = PROJECT_ROOT / "briefs"
 LOG_PATH = PROJECT_ROOT / "logs" / "posters-log.csv"
@@ -343,6 +348,58 @@ def apply_shorts_guidelines(
     return text.strip()
 
 
+def build_shorts_plan_prompt(keyword: str, topic: str) -> str:
+    return f"""
+너는 “일상 썰쇼츠 기획서 작가”다.
+사용자가 선택한 주제를 바탕으로,
+‘대본이 자연스럽게 이어지도록’ 사건 흐름을 설계한 기획서를 작성한다.
+
+[기획서 목표]
+- 줄글이지만, 내용은 “장면 단위로 떠오르게” 써야 한다
+- 동화/소설/교훈 느낌 금지
+- ‘설명’보다 ‘상황+행동+대사’ 중심
+- 대본으로 옮기면 바로 썰 말투가 되게 만들기
+
+────────────────────────
+
+[⭐ 자연스러운 전개 강제 룰]
+- 사건 흐름을 반드시 “원인 → 반응 → 더 큰 상황”으로 계단식 진행
+- 최소 4번 이상 “그래서/근데/그때/결국” 같은 연결어를 포함할 것
+- 인물 설정은 ‘재능/마스터’ 같은 설명으로 만들지 말고
+  행동으로 보여줄 것 (“자기가 나눠준다 해놓고 본인이 먹음”처럼)
+
+────────────────────────
+
+[8단계 흐름(순서 고정)]
+1) 인트로후킹 (첫 장면 바로)
+2) 상황세팅 (장소+인물+오늘의 분위기)
+3) 사건발생 (문제의 시작)
+4) 갈등폭발 (민망/정적/한마디)
+5) 오해/반전(선택) (있으면 1~2문장)
+6) 디테일증거 (물증/표정/손/소품)
+7) 결말 (웃기거나 민망하게 마무리)
+8) 댓글유도 (선택 질문)
+
+────────────────────────
+
+[금지]
+- “~라는 주제로 풀어보자” 같은 메타 문장
+- “남다른 재능/마스터/타이틀” 같은 설정 설명
+- 과장된 문어체 (“~였던지라”, “마스터답게”)
+- 교훈 엔딩, 감동 엔딩
+
+[분량]
+- 1000자 이내
+- 줄글로 쓰되, 3~5문단 정도로 나눠도 됨
+
+[출력]
+- 기획서 본문만 출력
+
+[선택 주제]
+{topic}
+""".strip()
+
+
 def build_shorts_script_prompt(
     keyword: str,
     guidelines: str,
@@ -350,30 +407,61 @@ def build_shorts_script_prompt(
     script_len: int,
     topic: str | None = None,
     ratio: str = "9:16",
+    plan: str | None = None,
 ) -> str:
-    guideline_block = apply_shorts_guidelines(guidelines, script_count, script_len, ratio)
-    guidelines_text = f"\n[지침]\n{guideline_block}\n" if guideline_block else ""
-    topic_text = f"\n[상황 주제]\n{topic.strip()}\n" if topic else ""
     return f"""
-너는 유튜브 쇼츠 대본을 쓰는 전문 작가다.
-키워드를 바탕으로 자연스럽고 간결한 대본을 작성한다.
-{guidelines_text}
-{topic_text}
-지침이 가장 우선이며, 아래 상세 설정은 지침을 훼손하지 않는 범위에서만 반영한다.
+너는 “일상 썰쇼츠 대본 생성기”다.
+사용자가 선택한 ‘주제’를 바탕으로,
+먼저 내부적으로 ‘8단계 썰 흐름 기획’을 설계한 뒤,
+그 설계를 기반으로 ‘대본만’ 출력한다.
 
-[출력 규칙]
-- 스크립트 {script_count}개를 작성한다. (지침과 충돌 시 지침을 우선)
-- 각 스크립트는 대략 {script_len}자 내외로 작성한다. (지침과 충돌 시 지침을 우선)
-- 군더더기 없이 바로 말문을 여는 구어체 톤.
-- 제목, 해시태그, 이모지는 쓰지 않는다.
+────────────────────────
+[입력값]
+- 주제: {topic or ""}
+- 스크립트 줄 수: {script_count}
+- 줄당 글자 수 제한: {script_len}자 이내(공백 포함)
+────────────────────────
 
-[키워드]
-{keyword}
+[내부 기획(출력 금지)]
+아래 흐름을 머릿속으로만 만들고, 절대 화면에 쓰지 마라.
+1) 인트로후킹
+2) 상황세팅(장소/인물/분위기)
+3) 사건발생(트리거)
+4) 갈등폭발(한마디/민망)
+5) 오해/반전(선택)
+6) 디테일증거(물증/표정/손/소품)
+7) 결말(웃기거나 민망)
+8) 댓글유도(선택 질문)
 
-아래 형식으로 출력한다. (번호/괄호 고정)
-1.(대사)
-2.(대사)
-3.(대사)
+────────────────────────
+[⭐ 자연스럽게 이어지게 만드는 규칙]
+- 모든 줄은 “앞줄의 결과” 때문에 다음 줄이 나오게 작성한다.
+- 최소 5줄 이상은 연결어를 포함한다:
+  그래서 / 근데 / 그러다가 / 하필 / 그때 / 순간 / 결국 / 그런데
+- ‘점프 금지’: 원인→반응→다음 행동을 한 박자로 연결할 것
+- ‘정적’은 반드시 “누군가 한마디” 바로 다음 줄에만 넣을 것
+
+────────────────────────
+[톤/대사 규칙]
+- 1인칭(나/우리)로 친구한테 썰 푸는 말투
+- 설명문/동화체 금지 (“~라는 주제로 풀어보자” 금지)
+- 전체 {script_count}줄 중 최소 4줄은 따옴표 대사 포함
+- 중반에 정적(싸해짐/파도소리/정적) 1줄 필수
+- 후반에 한방 드립(비유/놀림) 1줄 필수
+- 마지막 줄은 댓글 유도 질문으로 끝낼 것
+
+────────────────────────
+[금지어]
+- 등장, 마스터, 타이틀, 대혼란, 홀릭, 순식간에, 신나!
+- 교훈/감동 엔딩
+- 제품/브랜드/구매/가격/링크 언급
+
+────────────────────────
+[출력 형식]
+- 대본만 출력
+- 반드시 {script_count}줄만 출력
+- 각 줄은 {script_len}자 이내
+- 번호 1~{script_count} 붙여서 출력
 """.strip()
 
 
@@ -382,34 +470,308 @@ def save_quick_links(path: Path, links: list[dict]) -> None:
     path.write_text(json.dumps(links, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def parse_shorts_topics(text: str) -> list[str]:
+def parse_shorts_topic_lines(text: str) -> list[str]:
+    numbered: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.match(r"^[0-9]+\s*[.)]\s*", line):
+            line = re.sub(r"^[0-9]+\s*[.)]\s*", "", line).strip()
+            while re.match(r"^[0-9]+\s*[.)]\s*", line):
+                line = re.sub(r"^[0-9]+\s*[.)]\s*", "", line).strip()
+            if line:
+                numbered.append(line)
+    if numbered:
+        return numbered
+    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
+    topics: list[str] = []
+    for block in blocks:
+        first_line = block.splitlines()[0].strip()
+        first_line = re.sub(r"^주제명\\s*[:：]\\s*", "", first_line)
+        while re.match(r"^[0-9]+\s*[.)]\s*", first_line):
+            first_line = re.sub(r"^[0-9]+\s*[.)]\s*", "", first_line).strip()
+        if first_line:
+            topics.append(first_line)
+    if topics:
+        return topics
     lines = []
     for raw in text.splitlines():
         cleaned = raw.strip()
         if not cleaned:
             continue
-        cleaned = re.sub(r"^[0-9]+[.)]\\s*", "", cleaned)
+        while re.match(r"^[0-9]+\s*[.)]\s*", cleaned):
+            cleaned = re.sub(r"^[0-9]+\s*[.)]\s*", "", cleaned).strip()
         cleaned = re.sub(r"^[-•]\\s*", "", cleaned)
         if cleaned:
             lines.append(cleaned)
     return lines
 
 
-def build_shorts_topic_prompt(keyword: str, guidelines: str) -> str:
-    guideline_block = guidelines.strip()
-    guidelines_text = f"\n[지침]\n{guideline_block}\n" if guideline_block else ""
+def parse_shorts_topics(text: str) -> list[dict]:
+    card_pattern = re.compile(r"\\[카드\\s*\\d+[^\\]]*\\]", re.IGNORECASE)
+    matches = list(card_pattern.finditer(text))
+    cards: list[dict] = []
+    if matches:
+        for idx, match in enumerate(matches):
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            header = match.group().strip("[]").strip()
+            block = text[start:end].strip()
+            cards.append(parse_shorts_topic_card(header, block))
+        return cards
+    topics = parse_shorts_topic_lines(text)
+    for idx, topic in enumerate(topics, start=1):
+        cards.append(
+            {
+                "header": f"카드 {idx}",
+                "title": topic,
+                "summary": "",
+                "opening": "",
+                "conflict": "",
+                "twist": "",
+                "question": "",
+            }
+        )
+    return cards
+
+
+def parse_shorts_topic_card(header: str, block: str) -> dict:
+    card = {
+        "header": header,
+        "title": "",
+        "summary": "",
+        "opening": "",
+        "conflict": "",
+        "twist": "",
+        "question": "",
+    }
+    key_map = {
+        "주제명": "title",
+        "한 줄 요약": "summary",
+        "한줄 요약": "summary",
+        "오프닝 후킹(0~2초)": "opening",
+        "오프닝 후킹": "opening",
+        "중반 갈등 포인트": "conflict",
+        "결말 한 방/반전": "twist",
+        "댓글 유도 질문": "question",
+    }
+    invalid_value = re.compile(r"^\[?카드\s*\d+|갈등형|반전형|공감형", re.IGNORECASE)
+    for raw in block.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-•—–]\s*", "", line)
+        match = re.match(r"([^:]+)\\s*[:：]\\s*(.*)", line)
+        if not match:
+            continue
+        key = match.group(1).strip()
+        value = match.group(2).strip()
+        if not value or invalid_value.search(value):
+            continue
+        mapped = key_map.get(key)
+        if mapped:
+            card[mapped] = value
+    return card
+
+
+def format_shorts_topic_card(card: dict) -> str:
+    header = card.get("header", "")
+    lines = []
+    if header:
+        lines.append(f"[{header}]")
+    lines.append(f"- 주제명: {card.get('title', '')}".rstrip())
+    lines.append(f"- 한 줄 요약: {card.get('summary', '')}".rstrip())
+    lines.append(f"- 오프닝 후킹(0~2초): {card.get('opening', '')}".rstrip())
+    lines.append(f"- 중반 갈등 포인트: {card.get('conflict', '')}".rstrip())
+    lines.append(f"- 결말 한 방/반전: {card.get('twist', '')}".rstrip())
+    lines.append(f"- 댓글 유도 질문: {card.get('question', '')}".rstrip())
+    return "\n".join(lines).strip()
+
+
+def count_shorts_script_lines(text: str) -> int:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    numbered = [line for line in lines if re.match(r"^\d+\s*[.)]\s*", line)]
+    return len(numbered) if numbered else len(lines)
+
+
+def parse_shorts_image_prompts(text: str) -> list[str]:
+    prompts: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or "이미지 프롬프트" not in line:
+            continue
+        line = line.lstrip("-").strip()
+        _, _, rest = line.partition(":")
+        prompt = rest.strip().strip("“”\"")
+        if prompt:
+            prompts.append(prompt)
+    if prompts:
+        return prompts
+    for match in re.finditer(r"이미지 프롬프트:\s*[\"“](.+?)[\"”]", text):
+        prompt = match.group(1).strip()
+        if prompt:
+            prompts.append(prompt)
+    return prompts
+
+
+def download_youtube_audio(url: str, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "summary cookies path=%s cookies_from_browser=%s",
+        YTDLP_COOKIE_PATH or "(none)",
+        YTDLP_COOKIES_FROM_BROWSER or "(none)",
+    )
+    format_candidates = [
+        "bestaudio/best",
+        "bestaudio*",
+        "ba/best",
+        "worstaudio/worst",
+        "best",
+        "bestvideo+bestaudio/best",
+    ]
+    base_opts = {
+        "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "format_sort": ["hasaud"],
+        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
+    }
+    if YTDLP_COOKIE_PATH:
+        cookie_path = Path(YTDLP_COOKIE_PATH)
+        if not cookie_path.exists():
+            raise RuntimeError("쿠키 파일 경로가 유효하지 않습니다.")
+        base_opts["cookiefile"] = str(cookie_path)
+    elif YTDLP_COOKIES_FROM_BROWSER:
+        browser_spec = YTDLP_COOKIES_FROM_BROWSER.strip()
+        if ":" in browser_spec:
+            browser, profile = browser_spec.split(":", 1)
+            profile = profile.strip()
+            if "/" in profile:
+                profile = Path(profile).name
+            base_opts["cookiesfrombrowser"] = (browser.strip(), profile)
+        else:
+            base_opts["cookiesfrombrowser"] = (browser_spec,)
+    last_error = None
+    path = None
+    for fmt in format_candidates:
+        ydl_opts = dict(base_opts)
+        ydl_opts["format"] = fmt
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                downloads = info.get("requested_downloads") or []
+                if downloads and downloads[0].get("filepath"):
+                    path = Path(downloads[0]["filepath"])
+                else:
+                    path = Path(ydl.prepare_filename(info))
+            break
+        except Exception as exc:
+            last_error = exc
+            continue
+    if not path or not path.exists():
+        if last_error:
+            raise last_error
+        raise RuntimeError("오디오 파일을 찾지 못했습니다.")
+    return path
+
+
+def transcribe_audio(path: Path) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    with path.open("rb") as file_handle:
+        resp = requests.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            data={
+                "model": OPENAI_TRANSCRIBE_MODEL,
+                "language": OPENAI_TRANSCRIBE_LANGUAGE,
+            },
+            files={"file": file_handle},
+            timeout=120,
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"OpenAI transcription error {resp.status_code}: {resp.text}")
+    payload = resp.json()
+    text = payload.get("text", "").strip()
+    if not text:
+        raise RuntimeError("Empty transcription from OpenAI")
+    return text
+
+
+def split_text_chunks(text: str, max_len: int = 4000) -> list[str]:
+    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
+    if not paragraphs:
+        return []
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        separator = "\n" if current else ""
+        if len(current) + len(separator) + len(para) > max_len and current:
+            chunks.append(current)
+            current = para
+        else:
+            current = f"{current}{separator}{para}"
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def summarize_chunk(text: str) -> str:
+    prompt = f"""
+다음은 유튜브 영상 자막입니다. 한국어로 핵심만 간결하게 요약해 주세요.
+중복 표현은 줄이고, 흐름이 자연스럽게 이어지도록 작성합니다.
+
+자막:
+{text}
+""".strip()
+    return call_openai_text(prompt, system_prompt="You are a helpful assistant.")
+
+
+def summarize_transcript(text: str) -> str:
+    chunks = split_text_chunks(text, max_len=4000)
+    if not chunks:
+        return ""
+    if len(chunks) == 1:
+        return summarize_chunk(chunks[0])
+    summaries = [summarize_chunk(chunk) for chunk in chunks]
+    combined = "\n\n".join(summaries)
+    prompt = f"""
+다음은 영상 요약 초안들입니다. 한국어로 하나의 최종 요약으로 정리해 주세요.
+핵심만 간결하게 5~8문장으로 정리합니다.
+
+초안:
+{combined}
+""".strip()
+    return call_openai_text(prompt, system_prompt="You are a helpful assistant.")
+
+
+def build_shorts_topic_prompt(keyword: str) -> str:
     return f"""
-너는 유튜브 쇼츠의 대화 주제를 제안하는 기획자다.
-키워드를 바탕으로 대화로 풀기 좋은 상황 주제 3가지를 제안한다.
-{guidelines_text}
+너는 “쇼츠 주제 추천 엔진”이다.
+사용자가 입력한 ‘영상 키워드’를 바탕으로,
+조회수(10만+) 가능성이 높은 “쇼츠 주제” 3가지만 추천한다.
+
+[출력 조건]
+- 결과는 반드시 3개만 출력
+- 주제는 “짧은 한 줄”로 끝낼 것 (설명 금지)
+- 3개 주제는 서로 결이 달라야 한다
+  1) 갈등/오해형
+  2) 반전/충격형
+  3) 공감/현실형
+- 과장 광고 느낌 금지
+- 특정 브랜드/상품 홍보 금지
+- 누구나 이해할 수 있는 일상 단어로 작성
 
 [키워드]
 {keyword}
 
-출력 규칙:
-- 3줄로만 출력한다.
-- 각 줄은 상황 주제 한 개.
-- 번호, 따옴표, 불릿 없이 텍스트만 출력한다.
+[출력 포맷]
+1. (주제 한 줄)
+2. (주제 한 줄)
+3. (주제 한 줄)
 """.strip()
     
 
@@ -585,6 +947,7 @@ DEFAULT_SHORTS_GUIDELINES = """
 - 그냥 썰이다. 결론도 교훈도 없다.
 - 과장된 밈 말투, 자연스러운 구어체, MZ스럽게 말투 사용
 - 남녀 연인 / 친구 / 가족 등 관계는 상황에 맞게 자연스럽게 설정
+- 대본은 1인칭 주인공 시점으로만 말한다.
 
 [대본 구조 규칙]
 - 전체 스크립트 수: {스크립트_갯수}
@@ -957,13 +1320,14 @@ OUTPUT RULES (고정)
 - 표는 2~3개 이하, 각 표는 2열(항목/내용) 또는 3열(구분/본문/비고)로 짧게
 - 문단은 짧게(2~4문장), 호흡 빠르게
 - 마지막에 해시태그 8~12개(주제/구절/시리즈/분위기 중심)
+- 인용된 말씀/따옴표 안 구절은 반드시 ESV 영어 원문만 사용한다.
 - 반드시 포함할 섹션:
   1) 도입(왜 이 구절이었는지/왜 포스터였는지)
   2) 8테마 중 어디인지 + 시리즈명
   3) 말씀(ESV + 개역개정) 표 1개
   4) 핵심 의미 ‘한 문장’ 요약
   5) 감정 포인트 3개(줄글로)
-  6) 디자인 기획(타이포 위계, NOW 같은 장치, 흑백/컬러, 여백 의도)
+  6) 디자인 기획(타이포 스케일, NOW 같은 장치, 흑백/컬러, 여백 의도, 타이포 레이아웃 맵)
   7) 제작 정보/의도 요약 표 1개(테마/앵커텍스트/키감정/디자인포인트/공간의도)
   8) 어울리는 공간/위하고 싶은 사람(줄글)
   9) 마무리(기획 의도/내가 남기고 싶은 결론)
@@ -992,6 +1356,9 @@ USER (입력값)
 - ‘제작기/기획기’ 느낌이 나게: 의도/선택/구조 중심으로
 - 너무 신학 강의처럼 쓰지 말고, 내 감정과 기준을 담백히
 - 구매 유도 금지(요청 시 제외)
+- 디자인 기획 섹션에 ‘타이포 레이아웃 맵’을 반드시 포함한다.
+- 타이포 레이아웃 맵은 ESV 영문 구절에서 발췌한 문구만 사용하고, 3~5줄 실제 줄바꿈 형태로 보여준다.
+- 타이포 레이아웃 맵 아래에 “생략/축약한 구절”을 영문 발췌로 1~2개 적고, 왜 생략했는지 한 문장으로 설명한다.
 
 이 입력값을 바탕으로, 위 OUTPUT RULES의 구조와 길이를 그대로 지켜 네이버 블로그용 글을 완성해줘.
 """.strip()
@@ -2836,123 +3203,6 @@ def blog():
     )
 
 
-@app.route("/shorts", methods=["GET", "POST"])
-def shorts():
-    error = session.pop("flash_error", None)
-    notice = session.pop("flash_notice", None)
-    shorts_output = session.get("shorts_output", "")
-    shorts_images = session.get("shorts_image_paths", [])
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        if action == "generate_shorts_script":
-            keyword = request.form.get("shorts_topic", "").strip()
-            picked_topic = request.form.get("shorts_topic_pick", "").strip()
-            if not keyword:
-                session["flash_error"] = "키워드를 입력해 주세요."
-                return redirect(url_for("shorts"))
-            script_count = int(request.form.get("shorts_script_count", "15") or 15)
-            script_len = int(request.form.get("shorts_script_length", "30") or 30)
-            guidelines = DEFAULT_SHORTS_GUIDELINES
-            try:
-                prompt = build_shorts_script_prompt(
-                    keyword=keyword,
-                    guidelines=guidelines,
-                    script_count=script_count,
-                    script_len=script_len,
-                    topic=picked_topic or None,
-                    ratio="9:16",
-                )
-                output = call_openai_text(
-                    prompt,
-                    system_prompt="Follow the instructions exactly.",
-                )
-                session["shorts_output"] = output
-                session["shorts_keyword"] = keyword
-                session["shorts_script_count"] = script_count
-                session["shorts_script_length"] = script_len
-                session["flash_notice"] = "대본이 생성되었습니다."
-            except Exception as exc:
-                logger.exception("Shorts script generation failed")
-                session["flash_error"] = f"대본 생성 실패: {exc}"
-            return redirect(url_for("shorts"))
-        if action == "generate_shorts_images":
-            keyword = request.form.get("shorts_topic", "").strip() or session.get("shorts_keyword", "")
-            output_text = session.get("shorts_output", "")
-            if not keyword:
-                session["flash_error"] = "키워드를 입력해 주세요."
-                return redirect(url_for("shorts"))
-            if not output_text:
-                session["flash_error"] = "먼저 대본을 생성해 주세요."
-                return redirect(url_for("shorts"))
-            guidelines = DEFAULT_SHORTS_GUIDELINES
-            count_mode = request.form.get("shorts_image_count_mode", "script_count")
-            script_count = int(session.get("shorts_script_count", 15) or 15)
-            image_count = script_count
-            if count_mode == "custom":
-                image_count = int(request.form.get("shorts_image_count", "1") or 1)
-            ratio = request.form.get("shorts_image_ratio", "9:16")
-            size_map = {
-                "9:16": "1024x1792",
-                "1:1": "1024x1024",
-                "3:4": "1024x1792",
-            }
-            size = size_map.get(ratio, "1024x1792")
-            guideline_block = apply_shorts_guidelines(
-                guidelines,
-                script_count,
-                int(session.get("shorts_script_length", 30) or 30),
-                ratio,
-            )
-            guideline_text = f"\nGuidelines:\n{guideline_block}\n" if guideline_block else ""
-            prompt_base = (
-                "Create a clean, cinematic YouTube Shorts image inspired by the keyword. "
-                "No text, no logos, no captions. Focus on mood and visual clarity.\n\n"
-                f"Keyword: {keyword}\n"
-                f"Script context:\n{output_text}\n"
-                f"{guideline_text}"
-            )
-            prompts = [prompt_base for _ in range(max(1, image_count))]
-            try:
-                images_dir = PROJECT_ROOT / "logs" / "shorts-images"
-                paths = generate_images(prompts, images_dir, size=size)
-                session["shorts_image_paths"] = [str(path) for path in paths]
-                session["flash_notice"] = "이미지를 생성했습니다."
-            except Exception as exc:
-                logger.exception("Shorts image generation failed")
-                session["flash_error"] = f"이미지 생성 실패: {exc}"
-            return redirect(url_for("shorts"))
-    return render_template(
-        "shorts.html",
-        error=error,
-        notice=notice,
-        shorts_output=shorts_output,
-        shorts_images=shorts_images,
-    )
-
-
-@app.post("/shorts/suggest")
-def shorts_suggest():
-    payload = request.get_json(silent=True) or {}
-    keyword = str(payload.get("keyword", "")).strip()
-    if not keyword:
-        return jsonify({"error": "키워드를 입력해 주세요."}), 400
-    script_count = int(payload.get("script_count", 15) or 15)
-    script_len = int(payload.get("script_len", 30) or 30)
-    ratio = str(payload.get("ratio", "9:16") or "9:16")
-    guidelines = apply_shorts_guidelines(
-        DEFAULT_SHORTS_GUIDELINES,
-        script_count,
-        script_len,
-        ratio,
-    )
-    try:
-        prompt = build_shorts_topic_prompt(keyword, guidelines)
-        text = call_openai_text(prompt, system_prompt="Follow the instructions exactly.")
-        topics = parse_shorts_topics(text)[:3]
-        return jsonify({"topics": topics})
-    except Exception as exc:
-        logger.exception("Shorts topic suggestion failed")
-        return jsonify({"error": str(exc)}), 500
 
 
 if __name__ == "__main__":
