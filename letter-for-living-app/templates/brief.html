@@ -9,9 +9,17 @@
   <body>
     <main class="wrap">
       <section class="panel">
-        <h2>기획서</h2>
+        <div class="panel-header">
+          <h2>기획서</h2>
+          <button type="submit" form="briefForm" class="confirm-button">저장</button>
+        </div>
         <p class="meta">{{ file }}</p>
-        <pre>{{ content }}</pre>
+        {% if notice %}
+        <p class="meta">{{ notice }}</p>
+        {% endif %}
+        <form id="briefForm" method="post">
+          <textarea name="content" rows="24">{{ content }}</textarea>
+        </form>
         <a href="/">← 돌아가기</a>
       </section>
     </main>

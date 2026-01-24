@@ -2505,7 +2505,7 @@ def settings():
     return render_template("settings.html", notice=notice, settings_data=settings_data)
 
 
-@app.route("/brief")
+@app.route("/brief", methods=["GET", "POST"])
 def brief():
     rel = request.args.get("file", "").strip()
     if not rel:
@@ -2517,8 +2517,13 @@ def brief():
         abort(403)
     if not target.exists():
         abort(404)
+    notice = None
+    if request.method == "POST":
+        content = request.form.get("content", "")
+        target.write_text(content, encoding="utf-8")
+        notice = "기획서를 저장했습니다."
     content = target.read_text(encoding="utf-8")
-    return render_template("brief.html", content=content, file=str(rel))
+    return render_template("brief.html", content=content, file=str(rel), notice=notice)
 
 
 @app.get("/blog/image")
