@@ -1323,7 +1323,7 @@ OUTPUT RULES (고정)
 - 인용된 말씀/따옴표 안 구절은 반드시 ESV 영어 원문만 사용한다.
 - 이모지 사용 금지.
 - 아래 형식과 섹션명을 최대한 지켜서 작성:
-  1) H1: 반드시 “# {구절} 말씀 포스터 제작기” 형식으로 시작
+  1) H1: 반드시 “# {{구절}} 말씀 포스터 제작기” 형식으로 시작
   2) 도입(왜 이 구절이었는지/왜 포스터였는지)
   3) 시리즈 소개(예: “## 믿음의 시리즈, The Ground Beneath”)
   4) 말씀 본문(ESV + 개역개정) 표 1개
@@ -1907,8 +1907,18 @@ def planner():
     if request.method == "GET" and not session.pop("preserve_planner_result", False):
         session.pop("last_result", None)
         session.pop("last_planner_story", None)
+        session.pop("last_planner_story_path", None)
     result = session.get("last_result")
     planner_story = session.get("last_planner_story", "")
+    if not planner_story:
+        story_path = session.get("last_planner_story_path", "")
+        if story_path:
+            try:
+                path = Path(story_path)
+                if path.exists():
+                    planner_story = path.read_text(encoding="utf-8")
+            except Exception:
+                planner_story = ""
     selected_theme = ""
     poster_sketch_variant = session.get("poster_sketch_variant", 0)
 
@@ -2050,7 +2060,8 @@ def planner():
 
                 append_log(result, size, brief_path)
                 session["last_result"] = result
-                session["last_planner_story"] = story_text
+                session["last_planner_story_path"] = str(brief_path)
+                session.pop("last_planner_story", None)
                 session["preserve_planner_result"] = True
                 return redirect(url_for("planner", notice="기획서가 생성되었습니다."))
             except Exception as exc:
@@ -2145,7 +2156,8 @@ def planner_finalize(job_id: str):
     payload = job["result"]
     if job.get("type") == "generate":
         session["last_result"] = payload.get("result")
-        session["last_planner_story"] = payload.get("story", "")
+        session["last_planner_story_path"] = payload.get("story_path", "")
+        session.pop("last_planner_story", None)
         session["preserve_planner_result"] = True
         session["flash_notice"] = "기획서가 생성되었습니다."
     elif job.get("type") == "sketch":
@@ -2339,7 +2351,10 @@ def tasks():
             save_tasks(TASKS_PATH, tasks_list)
         elif action == "delete_task":
             task_id = request.form.get("task_id", "").strip()
-            tasks_list = [task for task in tasks_list if task.get("id") != task_id]
+            for task in tasks_list:
+                if task.get("id") == task_id:
+                    task["deleted_at"] = today_iso
+                    break
             save_tasks(TASKS_PATH, tasks_list)
             notice = "할 일을 삭제했습니다."
         elif action == "update_task":
@@ -2379,6 +2394,8 @@ def tasks():
     today_tasks = [task for task in tasks_list if task.get("category") != "fixed"]
     display_tasks = []
     for task in tasks_list:
+        if task.get("deleted_at"):
+            continue
         if task.get("repeat"):
             display_tasks.append(task)
             continue
@@ -2412,6 +2429,7 @@ def tasks():
         start_raw = str(task.get("start_date", "")).strip()
         end_raw = str(task.get("end_date", "")).strip()
         repeat_start_raw = str(task.get("repeat_start_date", "")).strip()
+        deleted_raw = str(task.get("deleted_at", "")).strip()
         interval = str(task.get("repeat_interval", "daily")).strip()
         created_raw = str(task.get("created_at", "")).strip()
         try:
@@ -2428,6 +2446,10 @@ def tasks():
             )
         except ValueError:
             repeat_start_date = None
+        try:
+            deleted_date = dt.date.fromisoformat(deleted_raw) if deleted_raw else None
+        except ValueError:
+            deleted_date = None
         if not start_date:
             try:
                 start_date = dt.datetime.fromisoformat(created_raw).date()
@@ -2440,6 +2462,10 @@ def tasks():
             else:
                 last_day = calendar.monthrange(year, month)[1]
                 range_end = dt.date(year, month, last_day)
+            if deleted_date:
+                deleted_end = deleted_date - dt.timedelta(days=1)
+                if deleted_end < range_end:
+                    range_end = deleted_end
             if range_end < range_start:
                 range_end = range_start
             step = 1
@@ -2452,7 +2478,8 @@ def tasks():
                 daily_tasks.setdefault(current, []).append(task)
                 current += dt.timedelta(days=step)
         else:
-            daily_tasks.setdefault(start_date or today, []).append(task)
+            if not deleted_date or start_date < deleted_date:
+                daily_tasks.setdefault(start_date or today, []).append(task)
     calendar_data: dict[str, dict[str, Any]] = {}
     for week in weeks:
         for day in week:
@@ -2868,8 +2895,9 @@ def run_planner_generation_job(
         brief_path = BRIEFS_DIR / f"{base_name}_story.md"
         brief_path.write_text(story_text, encoding="utf-8")
         append_log(result, size, brief_path)
+        result["story_path"] = str(brief_path)
         append_planner_job_log(job_id, "기획서가 생성되었습니다.", 100)
-        complete_planner_job(job_id, {"result": result, "story": story_text})
+        complete_planner_job(job_id, {"result": result, "story_path": str(brief_path)})
     except Exception as exc:
         logger.exception("Planner generation failed")
         append_planner_job_log(job_id, f"실패: {exc}")

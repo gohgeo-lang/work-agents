@@ -932,7 +932,9 @@ def open_naver_writer(
                     )
                     click_align_button("left")
                     set_element_text(body_el, para)
-                elif current_section == "체크리스트":
+                    content_idx += 1
+                    continue
+                if current_section == "체크리스트":
                     para = normalize_checklist_text(para)
                 if current_section == "되짚어볼 질문":
                     para = normalize_qa_text(para)
