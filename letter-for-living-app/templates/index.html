@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Letter for Living Planner</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -24,6 +25,7 @@
         <section class="panel planner-top-left">
           <h2>새 포스터</h2>
           <form method="post" id="plannerForm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           <div class="form-row">
             <div class="label-col">주제</div>
             <div class="field-col">
@@ -144,6 +146,7 @@
           </div>
           <div class="result-footer">
             <form method="post" class="confirm-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
               <input type="hidden" name="action" value="confirm" />
               <input type="hidden" name="verse_reference" value="{{ result.verse_reference if result else '' }}" />
               <input type="hidden" name="theme_value" value="{{ result.theme_display if result else '' }}" />
@@ -224,6 +227,7 @@
         </div>
         <div class="modal-body">
           <form method="post" class="used-form modal-add-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <input type="hidden" name="action" value="add_used" />
             <input type="hidden" name="modal" value="1" />
             <input type="text" name="verse_reference" placeholder="예: 요한복음 3:16" />
@@ -231,6 +235,7 @@
           </form>
           {% if used_list %}
           <form method="post" class="modal-bulk-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <input type="hidden" name="action" value="set_used_theme_bulk" />
             <input type="hidden" name="modal" value="1" />
             <ul class="modal-list">
@@ -300,6 +305,7 @@
 
     const sizeSelect = document.getElementById("sizeSelect");
     const familySelect = document.getElementById("sizeFamily");
+    const csrfToken = document.querySelector("meta[name='csrf-token']")?.content || "";
     const customWidth = document.querySelector("input[name='custom_width']");
     const customHeight = document.querySelector("input[name='custom_height']");
     const workWidth = document.querySelector("input[name='work_width']");
@@ -495,7 +501,10 @@
               clearTimeout(plannerPollTimer);
               plannerPollTimer = null;
             }
-            fetch(`/planner/finalize/${jobId}`, { method: "POST" })
+            fetch(`/planner/finalize/${jobId}`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": csrfToken },
+            })
               .then(() => {
                 closePlannerProgressModal();
                 window.location.href = "/planner";
@@ -534,7 +543,7 @@
       fetch("/planner/start", {
         method: "POST",
         body: formData,
-        headers: { "X-Requested-With": "fetch" },
+        headers: { "X-Requested-With": "fetch", "X-CSRF-Token": csrfToken },
       })
         .then((resp) => resp.json())
         .then((data) => {

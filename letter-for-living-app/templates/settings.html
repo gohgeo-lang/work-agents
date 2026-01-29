@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>설정</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -23,6 +24,7 @@
 
         <section class="panel">
           <form method="post" class="settings-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <div class="settings-block">
               <h3>AI 설정</h3>
               <p class="meta">OpenAI API Key를 저장합니다.</p>

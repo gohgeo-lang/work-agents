@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>할일목록</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -37,6 +38,7 @@
             <div class="task-item {% if task.done %}done{% endif %}">
               <div class="task-header">
                 <form method="post" class="task-toggle">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                   <input type="hidden" name="action" value="toggle_task" />
                   <input type="hidden" name="task_id" value="{{ task.id }}" />
                   <label class="task-label">
@@ -85,6 +87,7 @@
                     수정
                   </button>
                   <form method="post" class="task-delete">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                     <input type="hidden" name="action" value="delete_task" />
                     <input type="hidden" name="task_id" value="{{ task.id }}" />
                     <button type="submit" class="ghost-link delete-icon" data-confirm="삭제하시겠습니까?">
@@ -101,6 +104,7 @@
                 <div class="task-sublist">
                   {% for item in task.get("items", []) %}
                   <form method="post" class="task-subitem">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                     <input type="hidden" name="action" value="toggle_subtask" />
                     <input type="hidden" name="task_id" value="{{ task.id }}" />
                     <input type="hidden" name="item_id" value="{{ item.get('id') }}" />
@@ -232,6 +236,7 @@
                 {{ link.title }}
               </a>
               <form method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                 <input type="hidden" name="action" value="delete_quick_link" />
                 <input type="hidden" name="link_id" value="{{ link.id }}" />
                 <button type="submit" class="ghost-link delete-icon" data-confirm="삭제하시겠습니까?">
@@ -244,6 +249,7 @@
             <p class="meta">등록된 바로가기가 없습니다.</p>
             {% endif %}
             <form method="post" class="quick-link-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
               <input type="hidden" name="action" value="add_quick_link" />
               <input type="text" name="quick_title" placeholder="이름" />
               <input type="url" name="quick_url" placeholder="https://..." />
@@ -277,6 +283,7 @@
         </div>
         <div class="modal-body">
           <form method="post" class="task-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <input type="hidden" name="action" value="add_task" id="scheduleAction" />
             <input type="hidden" name="task_id" value="" id="scheduleTaskId" />
             <div class="form-row">
@@ -395,6 +402,7 @@
         }, 3000);
       }
 
+      const csrfToken = document.querySelector("meta[name='csrf-token']")?.content || "";
       const openScheduleModal = document.getElementById("openScheduleModal");
       const scheduleModal = document.getElementById("scheduleModal");
       const toggleOptionalFields = document.getElementById("toggleOptionalFields");
@@ -573,7 +581,10 @@
             body.set("order", order);
             fetch("/tasks", {
               method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-CSRF-Token": csrfToken,
+              },
               body: body.toString(),
             }).catch(() => {});
           };

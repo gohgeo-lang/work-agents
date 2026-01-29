@@ -1,5 +1,6 @@
 import csv
 import datetime as dt
+import hmac
 import json
 import os
 import re
@@ -38,9 +39,12 @@ def load_env(path: Path) -> None:
 
 load_env(APP_DIR / ".env")
 
-DEFAULT_PROJECT_ROOT = Path("/Users/admin/Desktop/고즈넉씨스튜디오/letter-for-living")
-DEFAULT_USED_VERSES = Path("/Users/admin/Desktop/고즈넉씨스튜디오/letter-for-living/used-verses.md")
-DEFAULT_THEMES = Path("/Users/admin/Desktop/고즈넉씨스튜디오/letter-for-living/themes.md")
+LFL_ENV = os.environ.get("LFL_ENV", "production").lower()
+IS_DEV = LFL_ENV in {"dev", "development", "local"}
+
+DEFAULT_PROJECT_ROOT = (APP_DIR.parent / "letter-for-living").resolve()
+DEFAULT_USED_VERSES = (DEFAULT_PROJECT_ROOT / "used-verses.md").resolve()
+DEFAULT_THEMES = (DEFAULT_PROJECT_ROOT / "themes.md").resolve()
 
 PROJECT_ROOT = Path(os.environ.get("LFL_PROJECT_ROOT", DEFAULT_PROJECT_ROOT))
 USED_VERSES_PATH = Path(os.environ.get("LFL_USED_VERSES", DEFAULT_USED_VERSES))
@@ -63,6 +67,31 @@ BLOG_IMAGE_MAP_PATH = PROJECT_ROOT / "logs" / "blog-images.json"
 APP_LOG_PATH = PROJECT_ROOT / "logs" / "app.log"
 TASKS_PATH = PROJECT_ROOT / "logs" / "tasks.json"
 QUICK_LINKS_PATH = PROJECT_ROOT / "logs" / "quick-links.json"
+JOB_STORE_PATH = PROJECT_ROOT / "logs" / "jobs.json"
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_IMAGE_TYPES = {"png", "jpeg", "webp"}
+JOB_TIMEOUT_SECONDS = 30 * 60
+
+def validate_runtime_config() -> None:
+    if not FLASK_SECRET_KEY or FLASK_SECRET_KEY == "dev-secret-key":
+        raise RuntimeError("FLASK_SECRET_KEY must be set to a non-default value")
+    if not OPENAI_API_KEY:
+        key_from_settings = ""
+        if SETTINGS_PATH.exists():
+            try:
+                settings_payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                if isinstance(settings_payload, dict):
+                    key_from_settings = str(settings_payload.get("openai_api_key", "")).strip()
+            except json.JSONDecodeError:
+                key_from_settings = ""
+        if not key_from_settings:
+            raise RuntimeError("OPENAI_API_KEY must be set before starting the server")
+    if not IS_DEV:
+        if os.environ.get("FLASK_DEBUG", "").strip() in {"1", "true", "True"}:
+            raise RuntimeError("Debug mode is disabled outside development")
+        if os.environ.get("FLASK_ENV", "").strip().lower() == "development":
+            raise RuntimeError("FLASK_ENV=development is not allowed outside development")
 
 FIXED_HOLIDAYS: dict[tuple[int, int], list[str]] = {
     (1, 1): ["신정"],
@@ -111,7 +140,16 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
+FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "")
+app.secret_key = FLASK_SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=not IS_DEV,
+    MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
+)
+if os.environ.get("LFL_SKIP_CONFIG_VALIDATE", "").strip() != "1":
+    validate_runtime_config()
 
 BLOG_JOBS: dict[str, dict] = {}
 BLOG_JOBS_LOCK = threading.Lock()
@@ -119,6 +157,65 @@ IMAGE_JOBS: dict[str, dict] = {}
 IMAGE_JOBS_LOCK = threading.Lock()
 PLANNER_JOBS: dict[str, dict] = {}
 PLANNER_JOBS_LOCK = threading.Lock()
+JOB_STORE_LOCK = threading.Lock()
+FILE_CACHE: dict[str, dict[str, object]] = {}
+FILE_CACHE_LOCK = threading.Lock()
+
+
+def get_csrf_token() -> str:
+    token = session.get("_csrf_token")
+    if not token:
+        token = uuid.uuid4().hex
+        session["_csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token() -> dict:
+    return {"csrf_token": get_csrf_token()}
+
+
+@app.before_request
+def enforce_csrf() -> None:
+    # Ensure local development on http://localhost works even if env flags are mis-set.
+    host = request.host.split(":", 1)[0]
+    if host in {"127.0.0.1", "localhost"}:
+        app.config["SESSION_COOKIE_SECURE"] = False
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            return
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        session_token = session.get("_csrf_token", "")
+        header_token = request.headers.get("X-CSRF-Token", "")
+        form_token = request.form.get("csrf_token", "")
+        token = header_token or form_token
+        if not session_token or not token or not hmac.compare_digest(session_token, token):
+            if request.headers.get("X-Requested-With") == "fetch" or request.is_json:
+                return jsonify({"error": "보안 토큰이 만료되었습니다. 새로고침 후 다시 시도해 주세요."}), 403
+            session["flash_error"] = "보안 토큰이 만료되었습니다. 새로고침 후 다시 시도해 주세요."
+            return redirect(request.referrer or url_for("home"))
+
+
+@app.after_request
+def apply_security_headers(response):
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+    )
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
+
+
+@app.errorhandler(413)
+def handle_payload_too_large(error):
+    message = "업로드 용량이 너무 큽니다. 20MB 이하로 다시 시도해 주세요."
+    if request.headers.get("X-Requested-With") == "fetch" or request.is_json:
+        return jsonify({"error": message}), 413
+    session["flash_error"] = message
+    return redirect(request.referrer or url_for("home"))
 
 
 def init_blog_job() -> str:
@@ -131,6 +228,8 @@ def init_blog_job() -> str:
             "error": None,
             "result": None,
         }
+        touch_job(BLOG_JOBS[job_id])
+    persist_job_store()
     return job_id
 
 
@@ -143,6 +242,8 @@ def update_blog_job(job_id: str, *, status: str | None = None, progress: int | N
             job["status"] = status
         if progress is not None:
             job["progress"] = progress
+        touch_job(job)
+    persist_job_store()
 
 
 def append_blog_job_log(job_id: str, message: str, progress: int | None = None) -> None:
@@ -153,6 +254,8 @@ def append_blog_job_log(job_id: str, message: str, progress: int | None = None) 
         job["logs"].append(message)
         if progress is not None:
             job["progress"] = progress
+        touch_job(job)
+    persist_job_store()
 
 
 def complete_blog_job(job_id: str, result: dict) -> None:
@@ -163,6 +266,8 @@ def complete_blog_job(job_id: str, result: dict) -> None:
         job["status"] = "completed"
         job["progress"] = 100
         job["result"] = result
+        touch_job(job)
+    persist_job_store()
 
 
 def fail_blog_job(job_id: str, message: str) -> None:
@@ -172,6 +277,8 @@ def fail_blog_job(job_id: str, message: str) -> None:
             return
         job["status"] = "failed"
         job["error"] = message
+        touch_job(job)
+    persist_job_store()
 
 
 def init_image_job() -> str:
@@ -184,6 +291,8 @@ def init_image_job() -> str:
             "error": None,
             "result": None,
         }
+        touch_job(IMAGE_JOBS[job_id])
+    persist_job_store()
     return job_id
 
 
@@ -195,6 +304,8 @@ def append_image_job_log(job_id: str, message: str, progress: int | None = None)
         job["logs"].append(message)
         if progress is not None:
             job["progress"] = progress
+        touch_job(job)
+    persist_job_store()
 
 
 def complete_image_job(job_id: str, result: dict) -> None:
@@ -205,6 +316,8 @@ def complete_image_job(job_id: str, result: dict) -> None:
         job["status"] = "completed"
         job["progress"] = 100
         job["result"] = result
+        touch_job(job)
+    persist_job_store()
 
 
 def fail_image_job(job_id: str, message: str) -> None:
@@ -214,6 +327,8 @@ def fail_image_job(job_id: str, message: str) -> None:
             return
         job["status"] = "failed"
         job["error"] = message
+        touch_job(job)
+    persist_job_store()
 
 
 def init_planner_job(job_type: str) -> str:
@@ -227,6 +342,8 @@ def init_planner_job(job_type: str) -> str:
             "result": None,
             "type": job_type,
         }
+        touch_job(PLANNER_JOBS[job_id])
+    persist_job_store()
     return job_id
 
 
@@ -238,6 +355,8 @@ def append_planner_job_log(job_id: str, message: str, progress: int | None = Non
         job["logs"].append(message)
         if progress is not None:
             job["progress"] = progress
+        touch_job(job)
+    persist_job_store()
 
 
 def complete_planner_job(job_id: str, result: dict) -> None:
@@ -248,6 +367,8 @@ def complete_planner_job(job_id: str, result: dict) -> None:
         job["status"] = "completed"
         job["progress"] = 100
         job["result"] = result
+        touch_job(job)
+    persist_job_store()
 
 
 def fail_planner_job(job_id: str, message: str) -> None:
@@ -257,6 +378,8 @@ def fail_planner_job(job_id: str, message: str) -> None:
             return
         job["status"] = "failed"
         job["error"] = message
+        touch_job(job)
+    persist_job_store()
 
 
 def load_settings(path: Path) -> dict:
@@ -268,9 +391,43 @@ def load_settings(path: Path) -> dict:
         return {}
 
 
-def save_settings(path: Path, data: dict) -> None:
+def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def atomic_write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if header:
+            writer.writerow(header)
+        for row in rows:
+            writer.writerow(row)
+    tmp_path.replace(path)
+
+
+def read_text_cached(path: Path) -> str:
+    key = str(path)
+    try:
+        stat = path.stat()
+        mtime = stat.st_mtime
+    except FileNotFoundError:
+        return ""
+    with FILE_CACHE_LOCK:
+        cached = FILE_CACHE.get(key)
+        if cached and cached.get("mtime") == mtime:
+            return cached.get("text", "")
+    text = path.read_text(encoding="utf-8")
+    with FILE_CACHE_LOCK:
+        FILE_CACHE[key] = {"mtime": mtime, "text": text}
+    return text
+
+def save_settings(path: Path, data: dict) -> None:
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def load_tasks(path: Path) -> list[dict]:
@@ -302,8 +459,7 @@ def load_tasks(path: Path) -> list[dict]:
 
 
 def save_tasks(path: Path, tasks: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(tasks, ensure_ascii=False, indent=2))
 
 
 def load_quick_links(path: Path) -> list[dict]:
@@ -346,6 +502,86 @@ def apply_shorts_guidelines(
     text = text.replace("{스크립트_당_글자수}", str(script_len))
     text = text.replace("{이미지_비율}", ratio)
     return text.strip()
+
+
+def sniff_image_type(stream) -> str | None:
+    head = stream.read(12)
+    stream.seek(0)
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def load_job_store(path: Path) -> dict:
+    if not path.exists():
+        return {"blog": {}, "image": {}, "planner": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {"blog": {}, "image": {}, "planner": {}}
+    except json.JSONDecodeError:
+        return {"blog": {}, "image": {}, "planner": {}}
+    return {
+        "blog": payload.get("blog", {}) if isinstance(payload.get("blog"), dict) else {},
+        "image": payload.get("image", {}) if isinstance(payload.get("image"), dict) else {},
+        "planner": payload.get("planner", {}) if isinstance(payload.get("planner"), dict) else {},
+    }
+
+
+def persist_job_store() -> None:
+    with JOB_STORE_LOCK:
+        snapshot = {
+            "blog": BLOG_JOBS,
+            "image": IMAGE_JOBS,
+            "planner": PLANNER_JOBS,
+        }
+        JOB_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = JOB_STORE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(JOB_STORE_PATH)
+
+
+def initialize_jobs_from_store() -> None:
+    store = load_job_store(JOB_STORE_PATH)
+    now = dt.datetime.now().isoformat()
+    for job_map in (store.get("blog", {}), store.get("image", {}), store.get("planner", {})):
+        for job in job_map.values():
+            if isinstance(job, dict) and job.get("status") == "running":
+                job["status"] = "failed"
+                job["error"] = "서버 재시작으로 작업이 중단되었습니다."
+                job["updated_at"] = now
+    with BLOG_JOBS_LOCK:
+        BLOG_JOBS.update(store.get("blog", {}))
+    with IMAGE_JOBS_LOCK:
+        IMAGE_JOBS.update(store.get("image", {}))
+    with PLANNER_JOBS_LOCK:
+        PLANNER_JOBS.update(store.get("planner", {}))
+
+
+initialize_jobs_from_store()
+
+
+def touch_job(job: dict) -> None:
+    now = dt.datetime.now().isoformat()
+    job.setdefault("created_at", now)
+    job["updated_at"] = now
+
+
+def job_is_timed_out(job: dict) -> bool:
+    if job.get("status") != "running":
+        return False
+    raw = str(job.get("created_at", "")).strip()
+    if not raw:
+        return False
+    try:
+        created_at = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    return (dt.datetime.now() - created_at).total_seconds() > JOB_TIMEOUT_SECONDS
 
 
 def build_shorts_plan_prompt(keyword: str, topic: str) -> str:
@@ -466,8 +702,7 @@ def build_shorts_script_prompt(
 
 
 def save_quick_links(path: Path, links: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(links, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(links, ensure_ascii=False, indent=2))
 
 
 def parse_shorts_topic_lines(text: str) -> list[str]:
@@ -779,7 +1014,7 @@ def read_used_verses(path: Path) -> set[str]:
     if not path.exists():
         return set()
     verses = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_text_cached(path).splitlines():
         line = line.strip()
         if line.startswith("-"):
             raw = line.lstrip("- ").strip()
@@ -924,7 +1159,7 @@ def remove_used_verse(path: Path, verse: str) -> None:
         return
     lines = path.read_text(encoding="utf-8").splitlines()
     kept = [line for line in lines if line.strip() != f"- {verse}"]
-    path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    atomic_write_text(path, "\n".join(kept) + ("\n" if kept else ""))
 
 
 DEFAULT_THEME_LIST = [
@@ -982,7 +1217,7 @@ def read_themes(path: Path) -> list[str]:
     if not path.exists():
         return DEFAULT_THEME_LIST.copy()
     themes = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_text_cached(path).splitlines():
         line = line.strip()
         if not line:
             continue
@@ -1745,8 +1980,7 @@ def load_blog_images(path: Path) -> dict[str, str]:
 
 
 def save_blog_images(path: Path, data: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def load_used_theme_map(log_path: Path) -> dict[str, str]:
@@ -1798,12 +2032,12 @@ def save_theme_override(path: Path, verse: str, theme: str) -> None:
             break
     if not updated:
         rows.append({"verse_reference": verse, "theme": theme})
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["verse_reference", "theme"])
-        for row in rows:
-            if row["verse_reference"] and row["theme"]:
-                writer.writerow([row["verse_reference"], row["theme"]])
+    payload = [
+        [row["verse_reference"], row["theme"]]
+        for row in rows
+        if row["verse_reference"] and row["theme"]
+    ]
+    atomic_write_csv(path, ["verse_reference", "theme"], payload)
 
 
 def load_new_badges(path: Path, now: dt.datetime) -> set[str]:
@@ -1824,11 +2058,10 @@ def load_new_badges(path: Path, now: dt.datetime) -> set[str]:
             if now - created_at <= dt.timedelta(days=1):
                 recent.append((verse, created_at))
     # prune expired entries
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["verse_reference", "created_at"])
-        for verse, created_at in recent:
-            writer.writerow([verse, created_at.isoformat(timespec="seconds")])
+    payload = [
+        [verse, created_at.isoformat(timespec="seconds")] for verse, created_at in recent
+    ]
+    atomic_write_csv(path, ["verse_reference", "created_at"], payload)
     return {verse for verse, _ in recent}
 
 
@@ -1853,12 +2086,12 @@ def save_new_badge(path: Path, verse: str, now: dt.datetime) -> None:
             break
     if not updated:
         rows.append({"verse_reference": verse, "created_at": now.isoformat(timespec="seconds")})
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["verse_reference", "created_at"])
-        for row in rows:
-            if row["verse_reference"]:
-                writer.writerow([row["verse_reference"], row["created_at"]])
+    payload = [
+        [row["verse_reference"], row["created_at"]]
+        for row in rows
+        if row["verse_reference"]
+    ]
+    atomic_write_csv(path, ["verse_reference", "created_at"], payload)
 
 
 def normalize_theme_display(theme: str, theme_order: list[str]) -> str:
@@ -2130,19 +2363,26 @@ def planner_sketch_start():
 
 @app.get("/planner/status/<job_id>")
 def planner_status(job_id: str):
+    timed_out = False
     with PLANNER_JOBS_LOCK:
         job = PLANNER_JOBS.get(job_id)
         if not job:
             return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
-        return jsonify(
-            {
-                "status": job["status"],
-                "progress": job["progress"],
-                "logs": job["logs"],
-                "error": job["error"],
-                "type": job.get("type"),
-            }
-        )
+        if job_is_timed_out(job):
+            job["status"] = "failed"
+            job["error"] = "작업 시간이 초과되었습니다."
+            touch_job(job)
+            timed_out = True
+        payload = {
+            "status": job["status"],
+            "progress": job["progress"],
+            "logs": job["logs"],
+            "error": job["error"],
+            "type": job.get("type"),
+        }
+    if timed_out:
+        persist_job_store()
+    return jsonify(payload)
 
 
 @app.post("/planner/finalize/<job_id>")
@@ -2166,6 +2406,7 @@ def planner_finalize(job_id: str):
         session["flash_notice"] = "텍스트 스케치를 다시 생성했습니다."
     with PLANNER_JOBS_LOCK:
         PLANNER_JOBS.pop(job_id, None)
+    persist_job_store()
     return jsonify({"ok": True})
 
 
@@ -2604,18 +2845,25 @@ def start_blog_job():
 
 @app.get("/blog/status/<job_id>")
 def blog_job_status(job_id: str):
+    timed_out = False
     with BLOG_JOBS_LOCK:
         job = BLOG_JOBS.get(job_id)
         if not job:
             return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
-        return jsonify(
-            {
-                "status": job["status"],
-                "progress": job["progress"],
-                "logs": job["logs"],
-                "error": job["error"],
-            }
-        )
+        if job_is_timed_out(job):
+            job["status"] = "failed"
+            job["error"] = "작업 시간이 초과되었습니다."
+            touch_job(job)
+            timed_out = True
+        payload = {
+            "status": job["status"],
+            "progress": job["progress"],
+            "logs": job["logs"],
+            "error": job["error"],
+        }
+    if timed_out:
+        persist_job_store()
+    return jsonify(payload)
 
 
 @app.post("/blog/images/start")
@@ -2654,18 +2902,25 @@ def start_image_job():
 
 @app.get("/blog/images/status/<job_id>")
 def image_job_status(job_id: str):
+    timed_out = False
     with IMAGE_JOBS_LOCK:
         job = IMAGE_JOBS.get(job_id)
         if not job:
             return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
-        return jsonify(
-            {
-                "status": job["status"],
-                "progress": job["progress"],
-                "logs": job["logs"],
-                "error": job["error"],
-            }
-        )
+        if job_is_timed_out(job):
+            job["status"] = "failed"
+            job["error"] = "작업 시간이 초과되었습니다."
+            touch_job(job)
+            timed_out = True
+        payload = {
+            "status": job["status"],
+            "progress": job["progress"],
+            "logs": job["logs"],
+            "error": job["error"],
+        }
+    if timed_out:
+        persist_job_store()
+    return jsonify(payload)
 
 
 @app.post("/blog/images/finalize/<job_id>")
@@ -2682,6 +2937,7 @@ def finalize_image_job(job_id: str):
     session["flash_notice"] = "이미지를 생성했습니다."
     with IMAGE_JOBS_LOCK:
         IMAGE_JOBS.pop(job_id, None)
+    persist_job_store()
     return jsonify({"ok": True})
 
 
@@ -2702,6 +2958,7 @@ def finalize_blog_job(job_id: str):
     session["flash_notice"] = "초안을 생성했습니다."
     with BLOG_JOBS_LOCK:
         BLOG_JOBS.pop(job_id, None)
+    persist_job_store()
     return jsonify({"ok": True})
 
 
@@ -2973,7 +3230,18 @@ def blog():
                 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
                 saved_paths: list[str] = []
                 for file in files[:2]:
-                    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", file.filename)
+                    filename = Path(file.filename).name
+                    ext = Path(filename).suffix.lower()
+                    if ext not in ALLOWED_IMAGE_EXTS:
+                        session["flash_error"] = "허용되지 않는 이미지 형식입니다."
+                        return redirect(url_for("blog"))
+                    file.stream.seek(0)
+                    detected = sniff_image_type(file.stream)
+                    file.stream.seek(0)
+                    if detected not in ALLOWED_IMAGE_TYPES:
+                        session["flash_error"] = "이미지 파일만 업로드할 수 있습니다."
+                        return redirect(url_for("blog"))
+                    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)
                     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
                     dest = IMAGE_DIR / f"{timestamp}_{safe_name}"
                     file.save(dest)
@@ -3250,4 +3518,5 @@ def blog():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5050"))
-    app.run(debug=True, port=port)
+    debug = IS_DEV and os.environ.get("FLASK_DEBUG", "").strip() in {"1", "true", "True"}
+    app.run(debug=debug, port=port)

@@ -36,3 +36,11 @@ Open `http://127.0.0.1:5000` in your browser.
 
 - If the ESV/개역개정 text must be exact, consider pasting the verse text manually.
 - The app uses the OpenAI Responses API and requires network access.
+
+## Testing
+
+Run the unit tests with Python's built-in unittest.
+
+```
+python -m unittest discover -s tests
+```

@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>블로그 자동화</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -37,6 +38,7 @@
             </button>
           </div>
           <form method="post" class="blog-form" id="blogGenerateForm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <input type="hidden" name="action" value="generate_blog" />
             <div class="form-row">
               <div class="label-col">글 생성 방식</div>
@@ -111,6 +113,7 @@
             </div>
           </form>
           <form method="post" class="blog-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <input type="hidden" name="action" value="open_naver_writer" />
             <div class="submit-row stack">
               {% if not blog_result %}
@@ -162,6 +165,7 @@
             id="blogEditForm"
             class="inline-action result-actions"
           >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <button
               type="submit"
               name="action"
@@ -220,6 +224,7 @@
               enctype="multipart/form-data"
               id="imageUploadForm"
             >
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
               <input type="hidden" name="action" value="upload_image" />
               <input type="file" name="image_file" accept="image/*" multiple />
               <p class="meta">최대 2장</p>
@@ -375,6 +380,7 @@
     </button>
   </body>
   <script>
+    const csrfToken = document.querySelector("meta[name='csrf-token']")?.content || "";
     const openBriefModal = document.getElementById("openBriefModal");
     const briefModal = document.getElementById("briefModal");
     if (openBriefModal && briefModal) {
@@ -547,7 +553,10 @@
                 clearTimeout(pollTimer);
                 pollTimer = null;
               }
-              fetch(`/blog/finalize/${jobId}`, { method: "POST" })
+              fetch(`/blog/finalize/${jobId}`, {
+                method: "POST",
+                headers: { "X-CSRF-Token": csrfToken },
+              })
                 .then(() => {
                   closeProgress();
                   window.location.href = "/blog";
@@ -585,7 +594,7 @@
         fetch("/blog/start", {
           method: "POST",
           body: formData,
-          headers: { "X-Requested-With": "fetch" },
+          headers: { "X-Requested-With": "fetch", "X-CSRF-Token": csrfToken },
         })
           .then((resp) => resp.json())
           .then((data) => {
@@ -725,7 +734,10 @@
                 clearTimeout(pollTimer);
                 pollTimer = null;
               }
-              fetch(`/blog/images/finalize/${jobId}`, { method: "POST" })
+              fetch(`/blog/images/finalize/${jobId}`, {
+                method: "POST",
+                headers: { "X-CSRF-Token": csrfToken },
+              })
                 .then(() => {
                   closeProgress();
                   window.location.href = "/blog";
@@ -775,7 +787,7 @@
         try {
           fetch("/blog/images/start", {
             method: "POST",
-            headers: { "X-Requested-With": "fetch" },
+            headers: { "X-Requested-With": "fetch", "X-CSRF-Token": csrfToken },
           })
             .then((resp) => resp.json())
             .then((data) => {
@@ -819,6 +831,7 @@
           headers: {
             "X-Requested-With": "fetch",
             "Content-Type": "application/json",
+            "X-CSRF-Token": csrfToken,
           },
           body: JSON.stringify(payload || {}),
         })
